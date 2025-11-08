@@ -2,7 +2,7 @@
   "name": "browser-copilot",
   "description": "Use AI agents at your fingertips while working on your favorite web applications",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",
