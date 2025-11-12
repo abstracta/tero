@@ -51,8 +51,9 @@ logger = logging.getLogger(__name__)
 DOCS_TOOL_ID = "docs"
 ADVANCED_FILE_PROCESSING = "advancedFileProcessing"
 
+
 def embedding_tokens_from_text(text: str) -> int:
-    embeddings_encoding = tiktoken.encoding_for_model(env.azure_embedding_deployment)
+    embeddings_encoding = tiktoken.encoding_for_model(env.embedding_model)
     return len(embeddings_encoding.encode(text))
 
 
@@ -68,7 +69,7 @@ class DocumentUrlSolvingRetriever(VectorStoreRetriever):
         run_manager: AsyncCallbackManagerForRetrieverRun,
         **kwargs: Any,
     ) -> list[Document]:
-        self.embedding_usage.increment(embedding_tokens_from_text(query), env.azure_embedding_cost_per_1k_tokens)
+        self.embedding_usage.increment(embedding_tokens_from_text(query), env.embedding_cost_per_1k_tokens)
         ret = await super()._aget_relevant_documents(
             query, run_manager=run_manager, **kwargs
         )
@@ -102,7 +103,7 @@ class DocsTool(AgentToolWithFiles):
     @property
     def embedding_usage(self) -> Usage:
         if self._embedding_usage is None:
-            self._embedding_usage = Usage(user_id=self.user_id, agent_id=self.agent.id, model_id=env.azure_embedding_deployment, type=UsageType.EMBEDDING_TOKENS)
+            self._embedding_usage = Usage(user_id=self.user_id, agent_id=self.agent.id, model_id=env.embedding_model, type=UsageType.EMBEDDING_TOKENS)
         return self._embedding_usage
 
     async def _setup_tool(
@@ -134,7 +135,8 @@ class DocsTool(AgentToolWithFiles):
         await DocToolConfigRepository(self.db).remove(self.agent.id)
 
     def _build_vectorstore(self):
-        return PGVector(embeddings=azure_provider.build_embedding(), connection=self._get_async_engine(),
+        ai_provider = ai_factory.get_provider(env.embedding_model)
+        return PGVector(embeddings=ai_provider.build_embedding(env.embedding_model), connection=self._get_async_engine(),
                         collection_name=self._build_collection_name(self.agent.id), use_jsonb=True)
 
     async def add_file(self, file: File, user: User):
@@ -154,10 +156,10 @@ class DocsTool(AgentToolWithFiles):
             file.processed_content = file_doc.page_content
             await FileRepository(self.db).update(file)
             await self._update_tool_description_with_file(file, model, message_usage)
-            docs = MarkdownTextSplitter.from_tiktoken_encoder(encoding_name=tiktoken.encoding_for_model(env.azure_embedding_deployment).name, model_name=env.azure_embedding_deployment,
+            docs = MarkdownTextSplitter.from_tiktoken_encoder(encoding_name=tiktoken.encoding_for_model(env.embedding_model).name,
                                         chunk_size=env.docs_tool_chunk_size, chunk_overlap=env.docs_tool_chunk_overlap).split_documents([file_doc])
             embeddings_tokens = sum(embedding_tokens_from_text(doc.page_content) for doc in docs)
-            self.embedding_usage.increment(embeddings_tokens, env.azure_embedding_cost_per_1k_tokens)
+            self.embedding_usage.increment(embeddings_tokens, env.embedding_cost_per_1k_tokens)
             await aindex(docs, self._build_record_manager(), self._build_vectorstore(), cleanup="incremental",
                             source_id_key="id", key_encoder="sha256")
 

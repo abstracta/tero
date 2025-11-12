@@ -30,8 +30,6 @@ class Settings(BaseSettings):
     azure_api_keys : list[SecretStr]
     azure_api_version : str
     azure_model_deployments : dict[str, AzureModelDeployment]
-    azure_embedding_deployment : str
-    azure_embedding_cost_per_1k_tokens : float
     azure_doc_intelligence_endpoint : Optional[str] = None
     azure_doc_intelligence_key : Optional[SecretStr] = None
     azure_doc_intelligence_cost_per_1k_pages_usd : float
@@ -44,6 +42,8 @@ class Settings(BaseSettings):
     agent_default_model : Optional[str] = None
     agent_basic_models : List[str]
     default_agent_name : str
+    embedding_model : str
+    embedding_cost_per_1k_tokens : float
     transcription_model : str
     aws_access_key_id : Optional[SecretStr] = None
     aws_secret_access_key : Optional[SecretStr] = None

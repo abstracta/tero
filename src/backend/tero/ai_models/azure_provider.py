@@ -9,6 +9,7 @@ import tiktoken
 
 from ..core.env import env
 from .domain import AiModelProvider
+from .openai_provider import get_encoding_model
 
 
 class AzureProvider(AiModelProvider):
@@ -42,20 +43,17 @@ class AzureProvider(AiModelProvider):
         )
         return response.text
 
+    def build_embedding(self, model: str) -> AzureOpenAIEmbeddings:
+        deployment = env.azure_model_deployments[model]
+        return AzureOpenAIEmbeddings(
+            azure_endpoint=env.azure_endpoints[deployment.endpoint_index],
+            azure_deployment=deployment,
+            api_version=env.azure_api_version,
+            api_key=env.azure_endpoints[deployment.endpoint_index])
+
 
 class ReasoningTokenCountingAzureChatOpenAI(AzureChatOpenAI):
 
     # we override this method which is the one used by get_num_tokens_from_messages to count the tokens
     def _get_encoding_model(self) -> tuple[str, tiktoken.Encoding]:
-        if self.model_name and (self.model_name.startswith("o") or self.model_name.startswith("gpt-4.")):
-            # we return gpt-4o or o- series since it is supported by existing implementation of get_num_tokens_from_messages
-            return "gpt-4o" if self.model_name.startswith("o") else self.model_name, tiktoken.get_encoding("o200k_base")
-        return super()._get_encoding_model()
-
-
-def build_embedding() -> AzureOpenAIEmbeddings:
-    return AzureOpenAIEmbeddings(
-        azure_endpoint=env.azure_endpoints[0],
-        azure_deployment=env.azure_embedding_deployment,
-        api_version=env.azure_api_version,
-        api_key=env.azure_api_keys[0])
+        return get_encoding_model(self.model_name, lambda: AzureChatOpenAI._get_encoding_model(self))

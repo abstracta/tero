@@ -54,6 +54,3 @@ class AWSProvider(AiModelProvider):
     
     def _get_model_provider(self, model: str) -> str:
         return model.split(".")[0]
-
-    async def transcribe_audio(self, file: io.BytesIO, model: str) -> str:
-        raise NotImplementedError("Transcription is not supported by AWS")

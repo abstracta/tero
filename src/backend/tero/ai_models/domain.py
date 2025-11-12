@@ -4,6 +4,7 @@ import io
 from typing import Any, Optional
 
 from langchain_core.callbacks import StdOutCallbackHandler
+from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tracers import ConsoleCallbackHandler
 from pydantic import computed_field
@@ -65,6 +66,8 @@ class AiModelProvider(ABC):
     def supports_model(self, model: str) -> bool:
         pass
     
-    @abstractmethod
     async def transcribe_audio(self, file: io.BytesIO, model: str) -> str:
-        pass
+        raise NotImplementedError("Transcription is not yet supported by this provider")
+
+    def build_embedding(self, model: str) -> Embeddings:
+        raise NotImplementedError("Embedding is not yet supported by this provider")

@@ -8,13 +8,15 @@ from .google_provider import GoogleProvider
 from .openai_provider import OpenAIProvider
 
 
-providers: list[AiModelProvider] = [AzureProvider()]
+providers: list[AiModelProvider] = []
+if env.openai_api_key:
+    providers.append(OpenAIProvider())
+if env.azure_endpoints and env.azure_api_keys:
+    providers.append(AzureProvider())
 if env.aws_access_key_id and env.aws_secret_access_key:
     providers.append(AWSProvider())
 if env.google_api_key:
     providers.append(GoogleProvider())
-if env.openai_api_key:
-    providers.append(OpenAIProvider())
 
 def get_provider(model: str) -> AiModelProvider:
     for provider in providers:
