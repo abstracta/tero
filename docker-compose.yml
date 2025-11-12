@@ -19,7 +19,7 @@ services:
       args:
         SKIP_FRONTEND: "true"
       additional_contexts:
-        common: service:common
+        tero-common: service:common
     environment:
       DB_URL: "postgresql+psycopg://postgres:admin@postgres/tero"
       OPENID_URL: ""
@@ -39,7 +39,7 @@ services:
     build:
       context: src
       additional_contexts:
-        common: service:common
+        tero-common: service:common
     environment:
       DB_URL: "postgresql+psycopg://postgres:admin@postgres/tero"
       OPENID_URL: "http://keycloak:8080/realms/tero"
