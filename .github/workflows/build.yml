@@ -65,3 +65,20 @@ jobs:
           poetry run pyright
           cp ../sample.env ../../.env
           poetry run alembic revision
+
+  publish-gh-pages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 23
+          cache: 'pnpm'
+          cache-dependency-path: 'docs/pnpm-lock.yaml'
+      - name: Publish
+        run: .github/gh-pages-deploy.sh
+        env:
+          ACCESS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
