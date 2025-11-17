@@ -1,0 +1,67 @@
+name: tero
+services:
+  common:
+    build:
+      context: src
+      dockerfile: common/Dockerfile
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: tero
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+  migrations:
+    build:
+      context: src
+      args:
+        SKIP_FRONTEND: "true"
+      additional_contexts:
+        tero-common: service:common
+    environment:
+      DB_URL: "postgresql+psycopg://postgres:admin@postgres/tero"
+      OPENID_URL: ""
+    env_file: .env
+    command: ["poetry", "run", "alembic", "upgrade", "head"]
+  keycloak:
+    image: keycloak/keycloak:26.3
+    ports:
+      - "8080:8080"
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    volumes:
+      - ./docker/keycloak:/opt/keycloak/data/import
+    command: [ "start-dev", "--import-realm" ]
+  app:
+    build:
+      context: src
+      additional_contexts:
+        tero-common: service:common
+    environment:
+      DB_URL: "postgresql+psycopg://postgres:admin@postgres/tero"
+      OPENID_URL: "http://keycloak:8080/realms/tero"
+      FRONTEND_OPENID_URL: "http://localhost:8080/realms/tero"
+      FRONTEND_URL: "http://localhost:8000"
+      BROWSER_TOOL_PLAYWRIGHT_MCP_URL: "http://playwright:8931/mcp"
+      BROWSER_TOOL_PLAYWRIGHT_OUTPUT_DIR: /tmp/playwright-output
+    env_file: .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - keycloak
+    volumes:
+      - ./src/backend/var/playwright-output:/tmp/playwright-output
+  playwright:
+    image: mcp/playwright:latest
+    ports:
+      - "8931:8931"
+    entrypoint: "node"
+    command: ["cli.js","--headless","--browser=chromium","--no-sandbox","--port=8931", "--viewport-size=1280x720","--allowed-hosts=playwright:8931,localhost:8931"]
+    volumes:
+      - ./src/backend/var/playwright-output:/tmp/playwright-output
+volumes:
+  postgres-data:
