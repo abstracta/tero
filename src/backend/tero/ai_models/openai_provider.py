@@ -45,7 +45,7 @@ class ReasoningTokenCountingChatOpenAI(ChatOpenAI):
         return get_encoding_model(self.model_name, lambda: ChatOpenAI._get_encoding_model(self))
 
 
-def get_encoding_model(model_name: str, default: Callable[[], tuple[str, tiktoken.Encoding]]) -> tuple[str, tiktoken.Encoding]:
+def get_encoding_model(model_name: Optional[str], default: Callable[[], tuple[str, tiktoken.Encoding]]) -> tuple[str, tiktoken.Encoding]:
         if model_name and model_name.startswith("o"):
             # we return gpt-4o for o- series since it is supported by existing implementation of get_num_tokens_from_messages
             return "gpt-4o", tiktoken.get_encoding("o200k_base")

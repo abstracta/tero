@@ -47,9 +47,9 @@ class AzureProvider(AiModelProvider):
         deployment = env.azure_model_deployments[model]
         return AzureOpenAIEmbeddings(
             azure_endpoint=env.azure_endpoints[deployment.endpoint_index],
-            azure_deployment=deployment,
+            azure_deployment=deployment.deployment_name,
             api_version=env.azure_api_version,
-            api_key=env.azure_endpoints[deployment.endpoint_index])
+            api_key=env.azure_api_keys[deployment.endpoint_index])
 
 
 class ReasoningTokenCountingAzureChatOpenAI(AzureChatOpenAI):
