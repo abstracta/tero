@@ -48,7 +48,7 @@ watch(visible, (_) => {
           </SimpleButton>
         </div>
       </template>
-      <div class="mb-4 w-150 h-28">
+      <div class="mb-4 w-150 min-h-28">
         <div v-if="uploadedFiles.length > 0" class="flex flex-col gap-4">
           <div class="border border-auxiliar-gray rounded-lg flex flex-row justify-between items-center p-2">
             <div class="flex flex-row gap-2 items-center">
