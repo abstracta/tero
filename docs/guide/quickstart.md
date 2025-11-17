@@ -10,7 +10,7 @@ The easiest way to try Tero is through the online demo. Request access at `https
 
 1. Clone the [repository](https://github.com/abstracta/tero). Make sure you have git-lfs installed to get all the files properly.
 2. Generate an OpenAI API key or an Azure OpenAI endpoint and key.
-3. Copy `src/sample.env` to `.env` and set `OPENAI_KEY` or `AZURE_OPENAI_KEY` and `AZURE_OPENAI_ENDPOINT`.
+3. Copy `src/sample.env` to `.env` and set `OPENAI_API_KEY` or `AZURE_API_KEYS` and `AZURE_ENDPOINTS`.
 4. Start the app and dependencies:
 
    ```bash

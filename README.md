@@ -26,7 +26,7 @@ To run Tero locally:
 
 1. Generate an OpenAI API key or an Azure OpenAI endpoint and key.
 2. Clone this repository. Make sure you have git-lfs installed to get all the files properly.
-3. Copy `src/sample.env` to `.env` in the project root and set `OPENAI_KEY` or `AZURE_OPENAI_KEY` and `AZURE_OPENAI_ENDPOINT`.
+3. Copy `src/sample.env` to `.env` in the project root and set `OPENAI_API_KEY` or `AZURE_API_KEYS` and `AZURE_ENDPOINTS`.
 4. Start the app and dependencies with `docker compose up -d`.
 5. Open `http://localhost:8000` and log in with username `test` and password `test`.
 
