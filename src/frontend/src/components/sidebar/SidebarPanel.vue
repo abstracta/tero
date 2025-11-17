@@ -10,6 +10,7 @@ import SidebarSkeleton from './SidebarSkeleton.vue';
 import SidebarSearch from './SidebarSearch.vue';
 import type { Thread, Agent } from '@/services/api';
 import { useSidebar } from '@/composables/useSidebar';
+import { ApiService } from '@/services/api';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -61,11 +62,24 @@ const newChat = () => {
   router.push('/');
 }
 
+const defaultAgentName = ref<string>('DEFAULT_AGENT_NAME');
+const api = new ApiService();
+
+const newChatTooltip = computed(() => `Iniciar nuevo chat con ${defaultAgentName.value}`);
+
 onMounted(async () => {
   try {
     isLoading.value = true;
     await loadAgents();
     await loadChats();
+    try {
+      const agent = await api.findDefaultAgent();
+      if (agent && agent.name) defaultAgentName.value = agent.name;
+    } catch (err) {
+      // fallback to existing .env value on backend if api fails
+      // leave defaultAgentName as 'DEFAULT_AGENT_NAME'
+      console.debug('Could not fetch default agent from API', err);
+    }
   } catch (error) {
     handleError(error);
   } finally {
@@ -132,17 +146,12 @@ onMounted(async () => {
 
       <div v-if="!isSidebarCollapsed" class="mt-5">
         <div class="sticky top-0 bg-white z-10">
-          <div class="flex justify-between items-center p-2">
-            <h3 class="flex items-center gap-2">
-              {{ t('chats') }}
-              <button class="p-1" @click="chatsCollapsed = !chatsCollapsed" :title="chatsCollapsed ? t('expandChats') : t('collapseChats')">
-                <component :is="chatsCollapsed ? IconChevronDown : IconChevronUp" class="w-5 h-5" />
-              </button>
-            </h3>
-            <div class="flex items-center gap-2">
+            <div class="flex justify-between items-center p-2">
+              <h3 class="">{{ t('chats') }}</h3>
               <SimpleButton
                 size="small"
                 @click="newChat"
+                v-tooltip.bottom="newChatTooltip"
                 class="hover:text-primary! hover:bg-transparent! border-0! ring-0! outline-0! shadow-none! gap-0.5!"
               >
                 <IconPlus size="12"  class="font-medium"/>
@@ -150,7 +159,6 @@ onMounted(async () => {
               </SimpleButton>
             </div>
           </div>
-        </div>
 
         <div v-if="!chatsCollapsed">
           <SidebarChat v-for="chat in displayedChats" :key="chat.id" :chat="chat" />
