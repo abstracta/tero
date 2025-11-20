@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 import { onMounted, ref, computed } from 'vue';
-import { IconChevronDown, IconChevronUp } from '@tabler/icons-vue';
+import { IconChevronDown, IconChevronUp, IconPlus, IconSearch, IconLogout } from '@tabler/icons-vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useChatStore } from '@/composables/useChatStore';
@@ -20,16 +20,45 @@ const { agentsStore, loadAgents } = useAgentStore();
 const { newAgent } = useAgentStore();
 const { handleError } = useErrorHandler();
 const { isSidebarCollapsed } = useSidebar();
+const api = new ApiService();
 
 const showingSearchInput = ref(false);
 const isLoading = ref(true);
 const searchQuery = ref('');
 const searchResults = ref<{ agents: Agent[], chats: Thread[] }>({ agents: [], chats: [] });
 const sidebarSearchRef = ref<InstanceType<typeof SidebarSearch> | null>(null);
-const displayedAgents = computed(() => filterModeIsActive.value && !sidebarSearchRef.value?.isSearching ? searchResults.value.agents : agentsStore.agents);
-const displayedChats = computed(() => filterModeIsActive.value && !sidebarSearchRef.value?.isSearching ? searchResults.value.chats : chatsStore.chats);
 const agentsCollapsed = ref(false);
 const chatsCollapsed = ref(false);
+const defaultAgentName = ref<string>('');
+
+const filterModeIsActive = computed(() => showingSearchInput.value && searchQuery.value )
+const displayedAgents = computed(() => filterModeIsActive.value && !sidebarSearchRef.value?.isSearching ? searchResults.value.agents : agentsStore.agents);
+const displayedChats = computed(() => filterModeIsActive.value && !sidebarSearchRef.value?.isSearching ? searchResults.value.chats : chatsStore.chats);
+
+
+onMounted(async () => {
+  try {
+    isLoading.value = true;
+    await loadAgents();
+    await loadChats();
+    defaultAgentName.value = (await api.findDefaultAgent()).name!;
+  } catch (error) {
+    handleError(error);
+  } finally {
+    isLoading.value = false;
+  }
+})
+
+const toggleSidebar = () => {
+  isSidebarCollapsed.value = !isSidebarCollapsed.value;
+};
+
+const handleSearchClick = () => {
+  if (filterModeIsActive.value) {
+    sidebarSearchRef.value?.clearSearch();
+  }
+  showingSearchInput.value = !showingSearchInput.value;
+};
 
 const onNewAgent = async () => {
   try {
@@ -39,47 +68,13 @@ const onNewAgent = async () => {
   }
 }
 
-const toggleSidebar = () => {
-  isSidebarCollapsed.value = !isSidebarCollapsed.value;
-};
-
-const logout = () => {
-  router.push('/logout');
-}
-
-const filterModeIsActive = computed(() => {
-  return showingSearchInput.value && searchQuery.value;
-})
-
-const handleSearchClick = () => {
-  if (filterModeIsActive.value) {
-    sidebarSearchRef.value?.clearSearch();
-  }
-  showingSearchInput.value = !showingSearchInput.value;
-};
-
 const newChat = () => {
   router.push('/');
 }
 
-const defaultAgentName = ref<string>('');
-const api = new ApiService();
-
-const newChatTooltip = computed(() => t('startNewChatWith', { name: defaultAgentName.value }));
-
-onMounted(async () => {
-  try {
-    isLoading.value = true;
-    await loadAgents();
-    await loadChats();
-    const agent = await api.findDefaultAgent();
-    if (agent && agent.name) defaultAgentName.value = agent.name;
-  } catch (error) {
-    handleError(error);
-  } finally {
-    isLoading.value = false;
-  }
-})
+const logout = () => {
+  router.push('/logout');
+}
 </script>
 
 <template>
@@ -120,14 +115,12 @@ onMounted(async () => {
         <SidebarDiscoverItem />
       </div>
 
-      <div class="sticky top-0 bg-white z-10">
-        <div class="flex justify-between items-center p-2">
-          <h3 class="flex items-center gap-2">
-            {{ t('agents') }}
-            <button class="p-1" @click="agentsCollapsed = !agentsCollapsed">
-              <component :is="agentsCollapsed ? IconChevronDown : IconChevronUp" class="w-5 h-5" />
-            </button>
-          </h3>
+      <div class="sticky top-0 bg-white z-10 p-2">
+        <div class="flex items-center gap-1 text-sm">
+          <button @click="agentsCollapsed = !agentsCollapsed">
+            <component :is="agentsCollapsed ? IconChevronDown : IconChevronUp" class="w-5 h-5" />
+          </button>
+          <span class="text-light-gray">{{ t('agents') }}</span>
         </div>
       </div>
 
@@ -141,20 +134,20 @@ onMounted(async () => {
       <div v-if="!isSidebarCollapsed" class="mt-5">
         <div class="sticky top-0 bg-white z-10">
             <div class="flex justify-between items-center p-2">
-              <h3 class="flex items-center gap-2">
-                {{ t('chats') }}
-                <button class="p-1" @click="chatsCollapsed = !chatsCollapsed">
+              <div class="flex items-center gap-1 text-sm">
+                <button @click="chatsCollapsed = !chatsCollapsed">
                   <component :is="chatsCollapsed ? IconChevronDown : IconChevronUp" class="w-5 h-5" />
                 </button>
-              </h3>
+                <span class="text-light-gray">{{ t('chats') }}</span>
+              </div>
               <SimpleButton
                 size="small"
                 @click="newChat"
-                v-tooltip.bottom="newChatTooltip"
-                class="hover:text-primary! hover:bg-transparent! border-0! ring-0! outline-0! shadow-none! gap-0.5!"
+                v-tooltip.bottom="t('newChatTooltip', { name: defaultAgentName })"
+                class="hover:text-primary! hover:bg-transparent! border-0! ring-0! outline-0! shadow-none! text-sm font-semibold gap-1"
               >
-                <IconPlus size="12"  class="font-medium"/>
-                <p class="underline underline-offset-2 font-medium">{{ t('newChat') }}</p>
+                <IconPlus class="w-5 h-5"/>
+                <p class="underline underline-offset-2">{{ t('newChat') }}</p>
               </SimpleButton>
             </div>
           </div>
@@ -165,7 +158,7 @@ onMounted(async () => {
             {{ t(filterModeIsActive ? 'noChatsFound' : 'noChats') }}
           </div>
         </div>
-        
+
       </div>
     </div>
 
@@ -188,9 +181,7 @@ onMounted(async () => {
     "en": {
       "createAgent": "Create agent",
       "agents": "Agents",
-      "startNewChatWith": "Start new chat with {name}",
-      "expandAgents": "Expand agents",
-      "collapseAgents": "Collapse agents",
+      "newChatTooltip": "Start new chat with {name}",
       "chats": "My chats",
       "logout": "Log out",
       "noChats": "Nothing to show here yet",
@@ -205,9 +196,7 @@ onMounted(async () => {
     "es": {
       "createAgent": "Crear agente",
       "agents": "Agentes",
-      "startNewChatWith": "Iniciar nuevo chat con {name}",
-      "expandAgents": "Expandir agentes",
-      "collapseAgents": "Contraer agentes",
+      "newChatTooltip": "Iniciar nuevo chat con {name}",
       "chats": "Mis chats",
       "logout": "Cerrar sesión",
       "noChats": "No hay nada para mostrar",
@@ -219,6 +208,5 @@ onMounted(async () => {
       "loadMore": "Cargar más",
       "newChat": "Nuevo chat"
     }
-
   }
 </i18n>
