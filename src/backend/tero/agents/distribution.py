@@ -151,7 +151,7 @@ def _create_icon_with_background(icon_bytes: bytes, bg_color: str) -> bytes:
 
 
 async def update_agent_from_zip(agent: Agent, zip_content: bytes, user: User, db: AsyncSession, background_tasks: BackgroundTasks) -> Agent:
-    with ZipFile(BytesIO(zip_content), metadata_encoding='utf-8') as zip_file:
+    with _open_zip_file(zip_content) as zip_file:
         found_root_folder = [ name.rsplit('/', 1)[0] for name in zip_file.namelist() if name.endswith('/agent.md') ]
         # supporting zip without root folder in case users zip the folder contents and not the folder itself
         root_folder = f"{found_root_folder[0]}/" if found_root_folder else ""
@@ -170,6 +170,20 @@ async def update_agent_from_zip(agent: Agent, zip_content: bytes, user: User, db
         await _update_tools(agent, parsed_tools, tools, zip_file, root_folder, user, db, background_tasks)
         await _update_tests(agent.id, parsed.get('tests', []), user.id, db)
         return agent
+
+    
+def _open_zip_file(zip_content: bytes) -> ZipFile:
+    zip_bytes = BytesIO(zip_content)
+    try:
+        # we test with utf-8 encoding in case the file was zipped in mac since python zip encoding auto detection does not 
+        # work when zip contains files with special characters (like ñ) on their names
+        ret = ZipFile(zip_bytes, metadata_encoding='utf-8')
+        ret.namelist()  # Test if metadata can be decoded
+        return ret
+    except (UnicodeDecodeError, Exception):
+        zip_bytes.seek(0)
+        # since some zip files might not use utf-8 encoding, we fallback to python zip encoding auto detection when utf-8 decoding fails
+        return ZipFile(zip_bytes)
 
 
 async def _find_tools(parsed_tools: List[Dict[str, Any]]) -> Dict[str, AgentTool]:
@@ -261,7 +275,7 @@ async def _remove_tool(tc: AgentToolConfig, user_id: int, db: AsyncSession):
 async def _update_tool(tc: AgentToolConfig, new_config: Dict[str, Any], tool: AgentTool, zip_file: ZipFile, root_folder: str, user: User, db: AsyncSession, background_tasks: BackgroundTasks):
     await _configure_parsed_tool(tc.tool_id, new_config, tc.agent, tc, tool, user, db)
     existing_files = {f.name: f for f in await AgentToolConfigFileRepository(db).find_by_agent_id_and_tool_id(tc.agent_id, tc.tool_id)}
-    new_files = await _parse_new_files(tc.tool_id, new_config.get('files', {}), zip_file, root_folder, user)
+    new_files = await _parse_new_files(tc.tool_id, zip_file, root_folder, user)
 
     for file_name, file in existing_files.items():
         if not file_name in new_files:
@@ -320,16 +334,17 @@ def _parse_config_value(value: Any, schema: dict, key: str, tool_id: str) -> Any
         raise ValueError(f"Invalid type '{schema_type}' while parsing tool '{tool_id}' config '{key}'")
 
 
-async def _parse_new_files(tool_id: str, files: Dict[str, str], zip_file: ZipFile, root_folder: str, user: User) -> Dict[str, File]:
-    return {name: _parse_new_file(tool_id, name, zip_file, root_folder, user) for name in files.keys()}
+async def _parse_new_files(tool_id: str, zip_file: ZipFile, root_folder: str, user: User) -> Dict[str, File]:
+    return {path.rsplit("/", 1)[1]: _parse_new_file(path, zip_file, user) for path in zip_file.namelist() if path.startswith(f"{root_folder}{tool_id}/") and path != f"{root_folder}{tool_id}/"}
 
 
-def _parse_new_file(tool_id: str, file_name: str, zip_file: ZipFile, root_folder: str, user: User) -> File:
+def _parse_new_file(file_path: str, zip_file: ZipFile, user: User) -> File:
+    file_name = file_path.rsplit("/", 1)[1]
     return File(
         name=file_name,
         content_type=mimetypes.guess_type(file_name)[0] or "",
         user_id=user.id,
-        content=zip_file.read(f"{root_folder}{tool_id}/{file_name}"),
+        content=zip_file.read(file_path),
         status=FileStatus.PENDING
     )
 
@@ -347,7 +362,7 @@ async def _update_tool_file(file: File, new_file: File, tc: AgentToolConfig, too
 
 async def _configure_new_tool(tool_id: str, new_config: Dict[str, Any], agent: Agent,tool: AgentTool, zip_file: ZipFile, root_folder: str, user: User, db: AsyncSession, background_tasks: BackgroundTasks):
     await _configure_parsed_tool(tool_id, new_config, agent, None, tool, user, db)
-    files = await _parse_new_files(tool_id, new_config.get('files', {}), zip_file, root_folder, user)
+    files = await _parse_new_files(tool_id, zip_file, root_folder, user)
     for file in files.values():
         await upload_tool_file(file, tool, agent.id, user, db, background_tasks)
 
