@@ -3,16 +3,19 @@ import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Agent, Thread } from '@/services/api';
 import { useAgentStore } from '@/composables/useAgentStore';
-import { IconMessage2Plus, IconEditCircle, IconHistory, IconTrash, IconInfoCircle, IconCopyPlus } from '@tabler/icons-vue';
+import { useChatExport } from '@/composables/useChatExport';
+import { IconMessage2Plus, IconEditCircle, IconHistory, IconTrash, IconInfoCircle, IconCopyPlus, IconDownload } from '@tabler/icons-vue';
 import { useErrorHandler } from '@/composables/useErrorHandler';
 
 const { configureAgent, cloneAgent } = useAgentStore();
 const { handleError } = useErrorHandler();
+const { exportChatAsJson, exportChatAsMarkdown } = useChatExport();
 
 const props = defineProps<{
     agent: Agent,
     chat: Thread,
-    editingAgent?: boolean
+    editingAgent?: boolean,
+    messages?: any[]
 }>()
 const emit = defineEmits<{
     (e: 'showPastChats'): void
@@ -61,6 +64,17 @@ const handleCloneAgent = async () => {
   }
 }
 
+
+const handleExportAsJson = () => {
+  exportChatAsJson(props.chat, props.chat.name, agentName.value, props.messages ?? []);
+  closeMenu();
+}
+
+const handleExportAsMarkdown = () => {
+  exportChatAsMarkdown(props.chat, props.chat.name, agentName.value, props.messages ?? []);
+  closeMenu();
+}
+
 </script>
 <template>
   <div class="flex items-center gap-2 px-3 py-1.5 text-light-gray border border-auxiliar-gray rounded-2xl" :class="[{ '!bg-abstracta !text-white': menuIsActive }]">
@@ -99,6 +113,17 @@ const handleCloneAgent = async () => {
             label: t('cloneAgentTooltip'),
             tablerIcon: IconCopyPlus,
             command: handleCloneAgent
+          },
+          { separator: true },
+          {
+            label: t('exportChatAsJsonTooltip'),
+            tablerIcon: IconDownload,
+            command: handleExportAsJson
+          },
+          {
+            label: t('exportChatAsMarkdownTooltip'),
+            tablerIcon: IconDownload,
+            command: handleExportAsMarkdown
           },
           { separator: true },
           {
@@ -141,7 +166,9 @@ const handleCloneAgent = async () => {
       "newChatTooltip": "New chat",
       "editAgentTooltip": "Edit agent",
       "agentInfoTooltip": "View details",
-      "cloneAgentTooltip": "Clone agent"
+      "cloneAgentTooltip": "Clone agent",
+      "exportChatAsJsonTooltip": "Export as JSON",
+      "exportChatAsMarkdownTooltip": "Export as Markdown"
     },
     "es": {
       "deleteChatTooltip": "Eliminar chat",
@@ -153,7 +180,9 @@ const handleCloneAgent = async () => {
       "newChatTooltip": "Nuevo chat",
       "editAgentTooltip": "Editar agente",
       "agentInfoTooltip": "Ver detalles",
-      "cloneAgentTooltip": "Clonar agente"
-    }
+      "cloneAgentTooltip": "Clonar agente",
+      "exportChatAsJsonTooltip": "Exportar como JSON",
+      "exportChatAsMarkdownTooltip": "Exportar como Markdown",
+          }
   }
 </i18n>

@@ -9,7 +9,7 @@ const { deleteChat } = useChatStore();
 const { handleError } = useErrorHandler();
 const { t } = useI18n();
 
-defineProps<{chat: Thread, agent: Agent, editingAgent?: boolean}>()
+defineProps<{chat: Thread, agent: Agent, messages?: any[], editingAgent?: boolean}>()
 const emit = defineEmits(['newChat', 'showPastChats']);
 
 const handleChatDelete = async (chat: Thread)=>{
@@ -27,7 +27,7 @@ const handleChatDelete = async (chat: Thread)=>{
     <div class="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-3 w-full">
       <div class="flex items-center gap-2">
         <Animate :effect="AnimationEffect.FADE_IN">
-          <ChatHeaderMenu :agent="agent" :chat="chat" :editing-agent="editingAgent" @show-past-chats="emit('showPastChats')"
+          <ChatHeaderMenu :agent="agent" :chat="chat" :messages="messages" :editing-agent="editingAgent" @show-past-chats="emit('showPastChats')"
             @delete-chat="handleChatDelete" @new-chat="emit('newChat')"/>
         </Animate>
       </div>

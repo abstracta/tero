@@ -381,6 +381,7 @@ const handleViewFile = (file: UploadedFile) => {
         v-if="chat && agentsStore.currentAgent"
         :chat="chat"
         :agent="agentsStore.currentAgent"
+        :messages="messages"
         :editing-agent="editingAgent"
         @new-chat="onNewChat"
         @show-past-chats="onShowPastChats"

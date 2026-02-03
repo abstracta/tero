@@ -1,0 +1,12 @@
+{
+  "dependencies": {
+    "moment": "^2.30.1"
+  },
+  "devDependencies": {
+    "@tsconfig/node22": "^22.0.5",
+    "@types/json-schema": "^7.0.15",
+    "@types/moment": "^2.11.29",
+    "@types/node": "^25.0.1",
+    "@vue/tsconfig": "^0.8.1"
+  }
+}

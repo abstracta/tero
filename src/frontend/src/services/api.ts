@@ -2,7 +2,16 @@ import auth from './auth'
 import moment from 'moment'
 import type { JSONSchema7 } from 'json-schema'
 import { UploadedFile, FileStatus, AgentPrompt } from '../../../common/src/utils/domain'
-import type { StatusUpdate } from '../../../common/src/components/chat/ChatMessage.vue'
+
+export interface StatusUpdate {
+  action: string
+  toolName?: string
+  description?: string
+  args?: any
+  step?: string
+  result?: string | string[]
+  timestamp: Date
+}
 
 export class HttpError extends Error {
   public status: number
@@ -756,6 +765,108 @@ export class ApiService {
     const formData = new FormData()
     formData.append('file', file)
     return await this.put(`/agents/${agentId}/dist`, formData)
+  }
+
+  exportChatAsJson(threadId: number, threadName: string, agentName: string, messages: any[]): void {
+    const exportData = {
+      schemaVersion: "1.0",
+      exportedAt: new Date().toISOString(),
+      chat: {
+        id: threadId,
+        title: threadName,
+        agent: { name: agentName }
+      },
+      messages: this.flattenMessages(messages)
+    };
+    this.downloadTextFile(JSON.stringify(exportData, null, 2), `chat_${threadId}_${Date.now()}.json`)
+  }
+
+  exportChatAsMarkdown(threadId: number, threadName: string, agentName: string, messages: any[]): void {
+    const markdown = this.messagesToMarkdown(threadName, agentName, messages)
+    this.downloadTextFile(markdown, `chat_${threadId}_${Date.now()}.md`)
+  }
+
+  /**
+   * Aplana la jerarquía de mensajes en un solo array, usando parentId para mantener la relación.
+   */
+  private flattenMessages(messages: any[], parentId: number | null = null, acc: any[] = []): any[] {
+    for (const msg of messages) {
+      const flatMsg: any = {
+        id: msg.id,
+        parentId: parentId === undefined ? null : parentId,
+        author: msg.origin === undefined ? (msg.isUser ? "user" : "agent") : (msg.origin === 0 ? "user" : "agent"),
+        text: msg.text,
+        meta: {
+          minutesSaved: msg.minutesSaved ?? null,
+          stopped: msg.stopped ?? null
+        },
+        statusUpdates: Array.isArray(msg.statusUpdates) ? msg.statusUpdates : []
+      };
+      acc.push(flatMsg);
+      if (msg.children && Array.isArray(msg.children) && msg.children.length > 0) {
+        this.flattenMessages(msg.children, msg.id, acc);
+      }
+    }
+    return acc;
+  }
+
+  private messagesToMarkdown(threadName: string, agentName: string, messages: any[]): string {
+    const exportDate = new Date().toLocaleDateString();
+    let markdown = `# ${threadName}\n\n**Agente**: ${agentName}\n**Fecha de exportación**: ${exportDate}\n\n---\n\n`;
+
+    const traverseMessages = (msgs: any[], depth: number = 0) => {
+      msgs.forEach(msg => {
+        const prefix = msg.origin === ThreadMessageOrigin.USER ? '👤 Usuario' : msg.isUser ? '👤 Usuario' : '🤖 Agente';
+        markdown += `### ${prefix}\n\n${msg.text}\n\n`;
+
+        // Mostrar siempre minutesSaved y stopped, aunque sean null
+        markdown += `*minutesSaved*: ${msg.minutesSaved ?? 'null'}\n\n`;
+        markdown += `*stopped*: ${msg.stopped ?? 'null'}\n\n`;
+
+        if (msg.minutesSaved) {
+          markdown += `⏱️ *Tiempo ahorrado: ${msg.minutesSaved} minutos*\n\n`;
+        }
+
+        if (msg.stopped) {
+          markdown += `⏸️ *Respuesta detenida*\n\n`;
+        }
+
+        // Incluir proceso de pensamiento del agente (statusUpdates)
+        if (Array.isArray(msg.statusUpdates) && msg.statusUpdates.length > 0) {
+          markdown += `**Proceso de pensamiento del agente:**\n`;
+          msg.statusUpdates.forEach((su: any, idx: number) => {
+            markdown += `- [${idx + 1}] Acción: ${su.action || ''}`;
+            if (su.toolName) markdown += ` | Herramienta: ${su.toolName}`;
+            if (su.description) markdown += ` | Descripción: ${su.description}`;
+            if (su.step) markdown += ` | Paso: ${su.step}`;
+            if (su.result) markdown += ` | Resultado: ${Array.isArray(su.result) ? su.result.join(', ') : su.result}`;
+            markdown += '\n';
+          });
+          markdown += '\n';
+        }
+
+        markdown += '---\n\n';
+
+        if (msg.children && msg.children.length > 0) {
+          traverseMessages(msg.children, depth + 1);
+        }
+      });
+    };
+
+    traverseMessages(messages);
+    return markdown;
+  }
+
+  private downloadTextFile(content: string, filename: string): void {
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
   }
 
   async findAgentById(agentId: number): Promise<Agent> {
