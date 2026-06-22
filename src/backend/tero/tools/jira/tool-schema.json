@@ -24,6 +24,7 @@
             "uniqueItems": true
         }
     },
+    "x-oauth-redirect": true,
     "required": ["clientId", "clientSecret", "scope"],
     "additionalProperties": false
 }

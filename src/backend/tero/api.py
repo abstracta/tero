@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 import logging
 import os
 
@@ -7,6 +8,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .api_keys.api import router as api_keys_router
 from .agents.api import router as agents_router
 from .agents.evaluators.api import router as evaluators_router
 from .agents.prompts.api import router as agents_prompts_router
@@ -19,6 +21,7 @@ from .external_agents.api import router as external_agents_router
 from .mcp_server import setup_mcp_server
 from .teams.api import router as teams_router
 from .threads.api import router as threads_router
+from .threads.agents_store import agents_store_lifespan
 from .tools.api import router as tools_router
 from .usage.api import router as usage_router
 from .users.api import router as users_router
@@ -30,14 +33,20 @@ def _setup_logging():
             if hasattr(record, 'getMessage'):
                 return not 'GET /health' in record.getMessage()
             return True
-        
+
     access_logger = logging.getLogger("uvicorn.access")
     access_logger.addFilter(HealthCheckFilter())
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with agents_store_lifespan():
+        yield
+
+
 logger = logging.getLogger(__name__)
 _setup_logging()
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"],
                    allow_headers=["*"], expose_headers=["Content-Disposition", "Content-Type", "Location"])
 app.add_middleware(GZipMiddleware)
@@ -48,7 +57,7 @@ setup_mcp_server(app)
 
 def _should_serve_frontend(path: str) -> bool:
     api_paths = ["/api", "/assets", "/mcp", "/.well-known/", "/resources/"]
-    return not any(path.startswith(prefix) for prefix in api_paths) and path != "/manifest.json"
+    return not any(path.startswith(prefix) for prefix in api_paths) and path not in ("/manifest.json",)
 
 
 @app.middleware("http")
@@ -93,7 +102,9 @@ async def manifest() -> Manifest:
         id=env.frontend_url,
         contact_email=env.contact_email,
         auth=ManifestAuthConfig(
-            url=env.frontend_openid_url or env.openid_url, client_id=env.openid_client_id, scope=env.openid_scope
+            url=env.frontend_openid_url or env.openid_url,
+            client_id=env.openid_client_id,
+            scope=env.openid_scope,
         ),
         disable_publish_global=env.disable_publish_global or False
     )
@@ -105,6 +116,7 @@ async def health_check():
 
 
 for router in [
+    api_keys_router,
     ai_models_router,
     agents_router,
     tools_router,

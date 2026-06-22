@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import SimpleButton from './SimpleButton.vue'
 import InteractiveInput from './InteractiveInput.vue'
-import { buildToolConfigName, findToolIcon } from '@tero/common/utils/toolConfig.js'
+import { buildToolConfigName, findToolIcon, toolIdKey } from '@tero/common/utils/toolConfig.js'
 import { ToolAuthType } from '@tero/common/utils/toolAuth.js'
 import { IconLoader2 } from '@tabler/icons-vue'
 
@@ -17,23 +17,15 @@ const emit = defineEmits<{
   (e: 'cancel'): void
 }>()
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 const token = ref('')
 
 const toolName = computed(() => buildToolConfigName(props.toolId))
 const toolIcon = computed(() => findToolIcon(props.toolId))
 const tokenLabel = computed(() => {
   const toolPrefix = props.toolId.split('-', 1)[0]
-  if (toolPrefix === 'github') {
-    return t('tokenLabelGitHub')
-  }
-  if (toolPrefix === 'youtrack') {
-    return t('tokenLabelYouTrack')
-  }
-  if (toolPrefix === 'practitest') {
-    return t('tokenLabelPractiTest')
-  }
-  return t('tokenLabel')
+  const key = `tokenLabel${toolPrefix.charAt(0).toUpperCase()}${toolPrefix.slice(1)}`
+  return te(key) ? t(key) : t('tokenLabel')
 })
 
 const onSubmit = () => {
@@ -105,9 +97,9 @@ const onCancel = () => {
     "completeAuthenticationOrCancel": "Please complete the authentication process in the opened window, or cancel to abort.",
     "enterToken": "Please enter the token required to use",
     "tokenLabel": "Token",
-    "tokenLabelGitHub": "Personal Access Token",
-    "tokenLabelYouTrack": "Permanent token",
-    "tokenLabelPractiTest": "Personal API Token",
+    "tokenLabelGithub": "Personal Access Token",
+    "tokenLabelYoutrack": "Permanent token",
+    "tokenLabelPractitest": "Personal API Token",
     "cancel": "Cancel",
     "submit": "Submit"
   },
@@ -116,9 +108,9 @@ const onCancel = () => {
     "completeAuthenticationOrCancel": "Por favor complete el proceso de autenticación en la ventana abierta, o cancele para abortar.",
     "enterToken": "Por favor ingrese el token requerido para usar",
     "tokenLabel": "Token",
-    "tokenLabelGitHub": "Personal Access Token",
-    "tokenLabelYouTrack": "Token permanente",
-    "tokenLabelPractiTest": "Token personal de API",
+    "tokenLabelGithub": "Personal Access Token",
+    "tokenLabelYoutrack": "Token permanente",
+    "tokenLabelPractitest": "Token personal de API",
     "cancel": "Cancelar",
     "submit": "Enviar"
   }

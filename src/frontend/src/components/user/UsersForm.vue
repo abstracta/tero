@@ -139,7 +139,7 @@ defineExpose({
             <span v-if="index === 0">{{ t('role') }}</span>
             <div class="flex gap-2 items-center">
                 <Select v-model="user.role" :options="roleOptions" optionLabel="label" optionValue="value" class="w-full" />
-                <SimpleIcon interactive @click="removeUser(index)" :icon="IconX" size="24" :class="user.username ? '' : 'invisible'" />
+                <SimpleIcon interactive @click="removeUser(index)" :icon="IconX" :size="24" :class="user.username ? '' : 'invisible'" />
             </div>
         </div>
     </div>

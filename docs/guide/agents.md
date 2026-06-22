@@ -75,7 +75,11 @@ Ask the agent to format answers in Markdown. You’ll get cleaner results (headi
 ::: tip PlantUML
 If you need UML or general diagrams, ask the agent to use [PlantUML](https://plantuml.com/).
 
-When doing so, instruct the agent not to wrap diagrams in code blocks so they render properly.
+When doing so, instruct the agent not to wrap diagrams in code blocks so they render properly. Add something like the following to the agent's system prompt:
+
+```
+When generating PlantUML diagrams, do not wrap them in code blocks. Output the raw diagram text starting directly with @startuml.
+```
 
 Example — this generates only the text of the diagram:
 

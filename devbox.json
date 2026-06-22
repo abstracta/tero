@@ -11,17 +11,36 @@
     },
     // use this since 23.7.0 builds locally and takes a long time
     "nodejs": "23.6.1",
-    "pnpm": "latest"
+    "pnpm": "11",
+    // provide libstdc++.so.6 / libz.so.1 for pip wheels (numpy, pyodbc)
+    "gcc-unwrapped": {
+      "version": "latest",
+      "outputs": ["lib"]
+    },
+    "zlib": "latest",
+    "unixODBCDrivers.msodbcsql18": "latest"
   },
   "env": {
     "VENV_DIR": "$DEVBOX_PROJECT_ROOT/src/backend/.venv",
-    "DEVBOX_PYPROJECT_DIR": "$DEVBOX_PROJECT_ROOT/src/backend"
+    "DEVBOX_PYPROJECT_DIR": "$DEVBOX_PROJECT_ROOT/src/backend",
+    // pip wheels (numpy, pyodbc) require libstdc++ and libz at runtime, which Nix does not expose on the default loader path
+    "LD_LIBRARY_PATH": "$DEVBOX_PROJECT_ROOT/.devbox/extralib:$LD_LIBRARY_PATH",
+    // point the nix unixODBC (pyodbc links against it) at our generated odbcinst.ini
+    "ODBCSYSINI": "$DEVBOX_PROJECT_ROOT/.devbox/odbc"
   },
   "shell": {
+    "init_hook": [
+      "mkdir -p \"$DEVBOX_PROJECT_ROOT/.devbox/extralib\"",
+      "ln -sf \"$DEVBOX_PROJECT_ROOT/.devbox/nix/profile/default/lib/libstdc++.so.6\" \"$DEVBOX_PROJECT_ROOT/.devbox/extralib/libstdc++.so.6\"",
+      "ln -sf \"$DEVBOX_PROJECT_ROOT/.devbox/nix/profile/default/lib/libz.so.1\" \"$DEVBOX_PROJECT_ROOT/.devbox/extralib/libz.so.1\"",
+      // pyodbc resolves drivers by name from odbcinst.ini; the Nix-installed driver is not in the system ODBC registry, so we generate one pointing at it
+      "mkdir -p \"$DEVBOX_PROJECT_ROOT/.devbox/odbc\"",
+      "_msodbc=$(ls \"$DEVBOX_PROJECT_ROOT\"/.devbox/nix/profile/default/lib/libmsodbcsql-*.so* 2>/dev/null | head -1); printf '[ODBC Driver 18 for SQL Server]\\nDescription=Microsoft ODBC Driver 18 for SQL Server\\nDriver=%s\\n' \"$_msodbc\" > \"$DEVBOX_PROJECT_ROOT/.devbox/odbc/odbcinst.ini\""
+    ],
     "scripts": {
       "install": [
         "cd src",
-        "pnpm --dir frontend install",
+        "pnpm install",
         "cd backend",
         "poetry install",
         "cd ../..",
@@ -67,6 +86,10 @@
       "browser": [
         "pnpm --dir src/browser-extension install",
         "pnpm --dir src/browser-extension run dev --port 6173"
+      ],
+      "build-cli": [
+        "cd src/cli",
+        "sh scripts/build.sh ${1:-dev}"
       ],
       "browser-build": [
         "cd src/browser-extension",

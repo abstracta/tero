@@ -1,18 +1,14 @@
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from http import HTTPMethod
 import logging
-from typing import Any, Optional, cast
+from typing import Any, Optional
 
-from pydantic import AnyHttpUrl
 from sqlmodel import Field, SQLModel, and_, select, delete
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from ...agents.domain import Agent, AgentToolConfig
 from ...core.repos import scalar
+from ..auth import ToolAuthCallback
 from ..core import load_schema
-from ..openapi_tool import OpenApiTool
-from ..auth import AgentToolOauth, ToolAuthCallback, ToolOAuthCallback, ToolOAuthClientInfo, ToolOAuthClientInfoRepository, ToolAuthRepository, OAuthMetadata, ToolAuthCallbackError, ToolAuthRequestException, ToolAuthTokenRequest
+from ..openapi_tool import OAuthOpenApiTool, OAuthToolConfig
 
 
 logger = logging.getLogger(__name__)
@@ -46,53 +42,31 @@ class JiraToolConfigRepository:
         await self._db.commit()
 
 
-class JiraTool(OpenApiTool):
+class JiraTool(OAuthOpenApiTool):
     id: str = JIRA_TOOL_ID
     name: str = "Jira"
     description: str = "Manage issues and track project activity"
     config_schema: dict = load_schema(__file__)
-    _client_secret: Optional[str] = None
 
-    async def _setup_tool(self, prev_config: Optional[AgentToolConfig]):
-        client_info_repo = ToolOAuthClientInfoRepository(self.db)
-        prev_client_info = await client_info_repo.find_by_ids(self.agent.id, self.id)
-        client_secret = self._get_secret("clientSecret")
-        client_id = self.config["clientId"]
-        if prev_config and prev_config.config != self.config or prev_client_info and client_secret and prev_client_info.client_secret != client_secret:
-            if not client_secret and prev_client_info and prev_client_info.client_id == client_id:
-                client_secret = prev_client_info.client_secret
-            await self.teardown()
-        if client_secret:
-            await client_info_repo.save(ToolOAuthClientInfo(
-                agent_id=self.agent.id,
-                tool_id=self.id,
-                client_id=client_id,
-                client_secret=client_secret,
-                token_endpoint_auth_method="client_secret_post",
-                scope=" ".join(self.config["scope"])))
-        async with self.load():
-            pass
-        
-    @asynccontextmanager
-    async def load(self) -> AsyncIterator['JiraTool']:
-       self._oauth = await self._load_oauth()
-       await self._oauth.solve_tokens()
-       cloud_id = await self._find_cloud_id()
-       self._api_url = f"{JIRA_BASE_API_URL}/ex/jira/{cloud_id}"
-       yield self
-
-    async def _load_oauth(self) -> AgentToolOauth:
-        base_url = "https://auth.atlassian.com"
-        oauth_metadata = OAuthMetadata(
-            issuer=AnyHttpUrl(base_url),
-            authorization_endpoint=AnyHttpUrl(f"{base_url}/authorize"),
-            token_endpoint=AnyHttpUrl(f"{base_url}/oauth/token")
+    def _oauth_config(self) -> OAuthToolConfig:
+        return OAuthToolConfig(
+            authority_base_url="https://auth.atlassian.com",
+            authorize_path="/authorize",
+            token_path="/oauth/token",
+            scope=" ".join(self.config["scope"]),
         )
-        client_info = await ToolOAuthClientInfoRepository(self.db).find_by_ids(self.agent.id, self.id)
-        if not client_info or not client_info.scope:
-            raise ToolAuthRequestException(ToolAuthTokenRequest(tool_id=self.id, agent_id=self.agent.id))
-        # add offline_access scope to be able to refresh tokens
-        return AgentToolOauth(base_url, oauth_metadata, cast(str, cast(ToolOAuthClientInfo, client_info).scope) + " offline_access", self.agent.id, self.id, self.user_id, self.db)
+
+    async def _resolve_api_url(self) -> str:
+        cloud_id = await self._find_cloud_id()
+        return f"{JIRA_BASE_API_URL}/ex/jira/{cloud_id}"
+
+    async def teardown(self):
+        await super().teardown()
+        await JiraToolConfigRepository(self.db).delete(self.agent.id)
+
+    async def auth(self, auth_callback: ToolAuthCallback):
+        await super().auth(auth_callback)
+        await JiraToolConfigRepository(self.db).delete(self.agent.id)
 
     async def _find_cloud_id(self):
         repo = JiraToolConfigRepository(self.db)
@@ -103,24 +77,6 @@ class JiraTool(OpenApiTool):
         ret = next(resource["id"] for resource in resp)
         await repo.save(JiraToolConfig(agent_id=self.agent.id, cloud_id=ret))
         return ret
-    
-    async def _add_auth_headers(self, headers: dict) -> dict:
-        tokens = await cast(AgentToolOauth, self._oauth).solve_tokens()
-        if tokens:
-            headers["Authorization"] = f"Bearer {tokens.access_token}"
-        return headers
-
-    async def auth(self, auth_callback: ToolAuthCallback):
-        state = await ToolAuthRepository(self.db).find_state(self.user_id, self.id, cast(ToolOAuthCallback, auth_callback).state)
-        if not state:
-            raise ToolAuthCallbackError("OAuth state not found")
-        oauth = await self._load_oauth()
-        await oauth.callback(cast(ToolOAuthCallback, auth_callback), state)
-
-    async def teardown(self):
-        await ToolAuthRepository(self.db).delete_token(self.user_id, self.agent.id, self.id)
-        await ToolOAuthClientInfoRepository(self.db).delete(self.agent.id, self.id)
-        await JiraToolConfigRepository(self.db).delete(self.agent.id)
 
     async def _load_api_spec(self) -> dict:
         ret = await super()._load_api_spec()
@@ -143,7 +99,7 @@ class JiraTool(OpenApiTool):
         projects_path = f"{base_path}/project"
         project_path = f"{projects_path}/{{projectIdOrKey}}"
         return path in [
-            issues_path, issue_path, f"{issue_path}/assignee", f"{issue_path}/attachments", f"{issue_path}/changelog", 
+            issues_path, issue_path, f"{issue_path}/assignee", f"{issue_path}/changelog", 
             comments_path, f"{comments_path}/{{id}}", properties_path, f"{properties_path}/{{propertyKey}}", f"{issue_path}/transitions", 
             f"{search_path}/approximate-count", f"{search_path}/jql", f"{projects_path}/search",
             f"{base_path}/myself", f"{base_path}/users/search"] \
@@ -153,6 +109,3 @@ class JiraTool(OpenApiTool):
         # Fix Jira schema which does not properly define the schema for comments.
         if "Atlassian Document Format" in schema.get("description", ""):
             self._refactor_ref(schema, "doc_node", schemas, refs)
-    
-    async def clone(self, agent_id: int, cloned_agent_id: int, tool_id: str, user_id: int, db: AsyncSession) -> None:
-        pass

@@ -8,7 +8,7 @@ from sqlmodel import col
 from .common import *
 
 from tero.agents.api import AGENTS_PATH, AGENT_PATH, AGENT_TOOLS_PATH, AGENT_TOOL_FILE_PATH, DEFAULT_SYSTEM_PROMPT
-from tero.agents.domain import PublicAgent, AgentToolConfig, LlmTemperature, ReasoningEffort, AgentUpdate
+from tero.agents.domain import PublicAgent, AgentToolConfig, AgentType, LlmTemperature, ReasoningEffort, AgentUpdate
 from tero.agents.prompts.api import AGENT_PROMPTS_PATH
 from tero.agents.prompts.domain import AgentPromptCreate, AgentPromptPublic, AgentPrompt
 from tero.agents.test_cases.api import TEST_CASES_PATH, TEST_CASE_MESSAGES_PATH, TEST_CASE_PATH
@@ -33,6 +33,35 @@ async def test_import_exported_minimal_agent(users: List[UserListItem], client: 
         id=target_agent_id, name=f"Agent #{source_agent_id}", description="", last_update=CURRENT_TIME, user_id=USER_ID,
         model_id=cast(str, env.agent_default_model), system_prompt=DEFAULT_SYSTEM_PROMPT, temperature=LlmTemperature.NEUTRAL, reasoning_effort=ReasoningEffort.LOW,
         recursion_limit=20, icon=None, can_edit=True, user=users[0]))
+
+
+@freeze_time(CURRENT_TIME)
+async def test_import_exported_agent_preserves_advanced_settings(users: List[UserListItem], client: AsyncClient):
+    source_agent_id = await _create_agent(client)
+    await _update_agent(source_agent_id, AgentUpdate(
+        recursion_limit=50, agent_type=AgentType.DEEP_AGENT, is_protected=True), client)
+    zip_file_content = await _export_agent(source_agent_id, client)
+    target_agent_id = await _create_agent(client)
+    await _import_agent(target_agent_id, zip_file_content, client)
+    resp = await _find_agent(target_agent_id, client)
+    assert_response(resp, PublicAgent(
+        id=target_agent_id, name=f"Agent #{source_agent_id}", description="", last_update=CURRENT_TIME, user_id=USER_ID,
+        model_id=cast(str, env.agent_default_model), system_prompt=DEFAULT_SYSTEM_PROMPT, temperature=LlmTemperature.NEUTRAL,
+        reasoning_effort=ReasoningEffort.LOW, recursion_limit=50, icon=None, can_edit=True, user=users[0],
+        is_protected=True, agent_type=AgentType.DEEP_AGENT))
+
+
+@freeze_time(CURRENT_TIME)
+async def test_import_old_export_applies_default_advanced_settings(users: List[UserListItem], client: AsyncClient):
+    agent_id = await _create_agent(client)
+    await _update_agent(agent_id, AgentUpdate(recursion_limit=40, agent_type=AgentType.DEEP_AGENT), client)
+    await _import_agent(agent_id, await _zip_markdown("minimal_agent"), client)
+    resp = await _find_agent(agent_id, client)
+    assert_response(resp, PublicAgent(
+        id=agent_id, name="Test Agent", description="A Test Agent", last_update=CURRENT_TIME, user_id=USER_ID,
+        model_id="gpt-5-mini", system_prompt="Test instructions", temperature=LlmTemperature.NEUTRAL,
+        reasoning_effort=ReasoningEffort.MEDIUM, recursion_limit=20, icon=None, can_edit=True, user=users[0],
+        agent_type=AgentType.REACT_AGENT))
 
 
 async def _create_agent(client: AsyncClient) -> int:

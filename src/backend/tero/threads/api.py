@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sse_starlette.event import ServerSentEvent
 from langgraph.errors import GraphRecursionError
+from langgraph.store.base import BaseStore
 
 from ..agents.repos import AgentRepository
 from ..ai_models import ai_factory
@@ -18,7 +19,9 @@ from ..core.api import BASE_PATH, with_heartbeat
 from ..core.auth import get_current_user
 from ..core.domain import CamelCaseModel
 from ..core.env import env
+from ..core import repos
 from ..core.repos import get_db
+from .agents_store import get_store
 from ..files.api import build_file_download_response
 from ..files.core import FileQuota, CurrentQuota, QuotaExceededError, add_encoding_to_content_type
 from ..files.domain import File, FileStatus, FileMetadata, FileProcessor, FileMetadataWithContent
@@ -32,7 +35,7 @@ from ..users.domain import User
 from .domain import ThreadListItem, Thread, ThreadMessage, ThreadMessageOrigin, ThreadUpdate,\
     ThreadMessagePublic, ThreadMessageFile, ThreadMessageUpdate, AgentActionEvent, AgentFileEvent,\
     AgentMessageEvent, ThreadTranscriptionResult, ModelRateLimitError
-from .engine import build_thread_name, AgentEngine
+from .engine import build_thread_name, AgentEngine, agent_store_namespace
 from .repos import ThreadRepository, ThreadMessageRepository, ThreadMessageFileRepository
 from .time_saved_estimation import estimate_minutes_saved
 
@@ -103,8 +106,23 @@ async def update_thread(thread_id: int, thread: ThreadUpdate, user: Annotated[Us
 
 @router.delete(THREAD_PATH, status_code=status.HTTP_204_NO_CONTENT)
 async def delete_thread(thread_id: int, user: Annotated[User, Depends(get_current_user)],
-        db: Annotated[AsyncSession, Depends(get_db)]) -> None:
+        db: Annotated[AsyncSession, Depends(get_db)],
+        store: Annotated[BaseStore, Depends(get_store)]) -> None:
     thread = await _find_thread(thread_id, user.id, db)
+    try:
+        namespace = agent_store_namespace(user.id, thread_id)
+        while True:
+            items = await store.asearch(namespace, limit=100)
+            if not items:
+                break
+            for item in items:
+                await store.adelete(namespace, item.key)
+
+    except Exception:
+        logger.warning(
+            f"Failed to clean up store namespace for thread {thread_id} (user {user.id})",
+            exc_info=True,
+        )
     await ThreadRepository(db).delete(thread)
 
 
@@ -137,7 +155,8 @@ class ThreadMessageOriginApi(Enum):
 
 @router.post(THREAD_MESSAGES_PATH, status_code=status.HTTP_201_CREATED)
 async def add_message(thread_id: int, request: Request, user: Annotated[User, Depends(get_current_user)],
-        db: Annotated[AsyncSession, Depends(get_db)], files: List[UploadFile] = []) -> StreamingResponse:
+        db: Annotated[AsyncSession, Depends(get_db)],
+        store: Annotated[BaseStore, Depends(get_store)], files: List[UploadFile] = []) -> StreamingResponse:
     thread = await _find_thread(thread_id, user.id, db)
     current_usage = await UsageRepository(db).find_current_month_user_usage_usd(user.id)
     if current_usage >= user.monthly_usd_limit:
@@ -157,7 +176,7 @@ async def add_message(thread_id: int, request: Request, user: Annotated[User, De
     existing_files = [ await _find_thread_message_file(thread_id, file_id, db) for file_id in file_ids ]
     try:
         # initialize engine so any tool authentication requirements are triggered before creating anything on db
-        engine = AgentEngine(thread.agent, user.id, db)
+        engine = AgentEngine(thread.agent, user.id, db, store)
         async with AsyncExitStack() as stack:
             await engine.load_tools(stack)
 
@@ -175,7 +194,7 @@ async def add_message(thread_id: int, request: Request, user: Annotated[User, De
         user_message = await repo.refresh_with_files(user_message)
 
         return StreamingResponse(
-            with_heartbeat(_agent_response(user_message, thread, user.id, db, is_in_agent_edition)),
+            with_heartbeat(_agent_response(user_message, thread, user.id, db, is_in_agent_edition, store)),
             media_type="text/event-stream",
         )
     except ToolAuthRequestException as e:
@@ -224,7 +243,7 @@ async def _handle_file_contents(files: List[UploadFile], user_message: ThreadMes
                 await UsageRepository(db).add(pdf_parsing_usage)
 
 
-async def _agent_response(message: ThreadMessage, thread: Thread, user_id: int, db: AsyncSession, is_in_agent_edition: bool) \
+async def _agent_response(message: ThreadMessage, thread: Thread, user_id: int, db: AsyncSession, is_in_agent_edition: bool, store: BaseStore) \
         -> AsyncIterator[bytes]:
     message_usage = None
     repo = ThreadMessageRepository(db)
@@ -242,13 +261,24 @@ async def _agent_response(message: ThreadMessage, thread: Thread, user_id: int, 
         message_usage = MessageUsage(user_id=user_id, agent_id=thread.agent_id, model_id=thread.agent.model_id, message_id=message.id)
         thread_messages = await repo.find_previous_messages(message)
 
+        thread_name_task = None
         if len(thread_messages) == 0:
-            thread.name = await build_thread_name(message.text, message_usage, db)
-            await ThreadRepository(db).update(thread)
+            thread_name_task = asyncio.create_task(_build_and_save_thread_name(
+                thread_id=thread.id,
+                user_id=user_id,
+                message_text=message.text,
+                parent_message_id=message.id,
+            ))
 
-        answer_stream = AgentEngine(thread.agent, user_id, db).answer([*thread_messages, message], message_usage, stop_event)
+        answer_stream = AgentEngine(thread.agent, user_id, db, store).answer([*thread_messages, message], message_usage, stop_event)
+        thread_title_sent = False
 
         async for event in answer_stream:
+            if thread_name_task is not None and not thread_title_sent and thread_name_task.done():
+                thread_title_sent = True
+                thread_name = thread_name_task.result()
+                if thread_name:
+                    yield ServerSentEvent(event="threadUpdated", data=json.dumps({"name": thread_name})).encode()
             if isinstance(event, AgentActionEvent):
                 status_updates.append(event)
                 payload = json.dumps(event.model_dump(mode="json", by_alias=True))
@@ -261,17 +291,8 @@ async def _agent_response(message: ThreadMessage, thread: Thread, user_id: int, 
             else:
                 raise RuntimeError(f"Unsupported event type: {type(event)}")
 
-        if stop_event.is_set() or is_in_agent_edition:
-            minutes_saved = 0
-        else:
-            minutes_saved = await estimate_minutes_saved(
-                user_message=message.text,
-                agent_response=complete_answer,
-                thread=thread,
-                thread_messages=thread_messages,
-                message_usage=message_usage,
-                db=db
-            )
+        should_estimate_minutes_saved = not stop_event.is_set() and not is_in_agent_edition
+        minutes_saved = 0 if not should_estimate_minutes_saved else None
 
         answer = await repo.add(ThreadMessage(
             thread_id=thread.id,
@@ -292,6 +313,49 @@ async def _agent_response(message: ThreadMessage, thread: Thread, user_id: int, 
             "stopped": answer.stopped
         })).encode()
 
+        if should_estimate_minutes_saved:
+            minutes_saved = await _estimate_and_save_minutes_saved(
+                answer_message=answer,
+                user_message=message.text,
+                agent_response=complete_answer,
+                thread=thread,
+                thread_messages=thread_messages,
+                user_id=user_id,
+                db=db,
+            )
+            if minutes_saved is not None:
+                yield ServerSentEvent(event="messageUpdated", data=json.dumps({
+                    "messageId": answer.id,
+                    "minutesSaved": minutes_saved,
+                })).encode()
+
+        if thread_name_task is not None and not thread_title_sent:
+            thread_name = await thread_name_task
+            if thread_name:
+                yield ServerSentEvent(event="threadUpdated", data=json.dumps({
+                    "name": thread_name,
+                })).encode()
+
+    except* asyncio.CancelledError:
+        logger.info(f"Streaming response cancelled for thread {thread.id}, message {message.id}")
+
+        has_partial = bool(complete_answer)
+        interrupted_msg = ThreadMessage(
+            thread_id=thread.id,
+            text=complete_answer if has_partial else "ERROR_INTERRUPTED",
+            origin=ThreadMessageOrigin.AGENT if has_partial else ThreadMessageOrigin.SYSTEM,
+            parent_id=message.id,
+            minutes_saved=0 if has_partial else None,
+            stopped=has_partial,
+            status_updates=_dump_status_updates(status_updates),
+        )
+
+        save_task = asyncio.create_task(_save_interrupted_message(thread.id, interrupted_msg, files))
+        try:
+            await asyncio.shield(save_task)
+        except asyncio.CancelledError:
+            pass
+        raise
     except* GraphRecursionError:
         await repo.add(ThreadMessage(
             thread_id=thread.id,
@@ -323,6 +387,75 @@ async def _agent_response(message: ThreadMessage, thread: Thread, user_id: int, 
     finally:
         await UsageRepository(db).add(message_usage)
         del active_streaming_connections[thread.id]
+
+
+async def _build_and_save_thread_name(
+        thread_id: int,
+        user_id: int,
+        message_text: str,
+        parent_message_id: int,
+) -> Optional[str]:
+    try:
+        async with AsyncSession(repos.engine, expire_on_commit=False) as db:
+            thread = await _find_thread(thread_id, user_id, db)
+            title_usage = MessageUsage(
+                user_id=user_id,
+                agent_id=thread.agent_id,
+                model_id=env.internal_generator_model,
+                message_id=parent_message_id,
+            )
+            thread.name = await build_thread_name(message_text, title_usage, db)
+            await ThreadRepository(db).update(thread)
+            await UsageRepository(db).add(title_usage)
+            return thread.name
+    except Exception:
+        logger.exception(f"Failed to build thread name for thread {thread_id}")
+        return None
+
+
+async def _estimate_and_save_minutes_saved(
+        answer_message: ThreadMessage,
+        user_message: str,
+        agent_response: str,
+        thread: Thread,
+        thread_messages: List[ThreadMessage],
+        user_id: int,
+        db: AsyncSession,
+) -> Optional[int]:
+    try:
+        evaluator_usage = MessageUsage(
+            user_id=user_id,
+            agent_id=thread.agent_id,
+            model_id=cast(str, env.internal_evaluator_model),
+            message_id=answer_message.parent_id,
+        )
+        minutes_saved = await estimate_minutes_saved(
+            user_message=user_message,
+            agent_response=agent_response,
+            thread=thread,
+            thread_messages=thread_messages,
+            message_usage=evaluator_usage,
+            db=db,
+        )
+        answer_message.minutes_saved = minutes_saved
+        await ThreadMessageRepository(db).update(answer_message)
+        await UsageRepository(db).add(evaluator_usage)
+        return minutes_saved
+    except Exception:
+        logger.exception(f"Failed to estimate minutes saved for message {answer_message.id}")
+        return None
+
+
+async def _save_interrupted_message(thread_id: int, interrupted_msg: ThreadMessage, files: List[FileMetadata]) -> None:
+    try:
+        async with AsyncSession(repos.engine, expire_on_commit=False) as iso_session:
+            saved_interrupted_msg = await ThreadMessageRepository(iso_session).add(interrupted_msg)
+            for f in files:
+                await ThreadMessageFileRepository(iso_session).add(
+                    ThreadMessageFile(thread_message_id=saved_interrupted_msg.id, file_id=f.id)
+                )
+    except Exception:
+        logger.exception(f"Failed saving interrupted message for thread {thread_id}")
 
 
 def _dump_status_updates(status_updates: List[AgentActionEvent]) -> Optional[List[dict]]:

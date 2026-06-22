@@ -7,14 +7,13 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
-from langchain_openai import ChatOpenAI
-from openai import RateLimitError
 from langchain_core.utils.function_calling import convert_to_openai_tool
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from openai import RateLimitError
 from tokenizers import Tokenizer
 
 from ..core.env import env
 from .domain import AiModelProvider
-from .openai_provider import UsageTrackingOpenAIEmbeddings
 
 
 logger = logging.getLogger(__name__)
@@ -40,11 +39,9 @@ class VllmAiProvider(AiModelProvider):
     def is_rate_limit_error(self, exc: Exception) -> bool:
         return isinstance(exc, RateLimitError)
 
-    def build_embedding(self, model: str, usage_tracker: Callable[[int], None]) -> Embeddings:
+    def build_embedding(self, model: str) -> Embeddings:
         index, model_id = self._find_vllm_model(model)
-        print(f"Building embedding model {model_id} with context limit {env.embedding_context_limit}")
-        return UsageTrackingOpenAIEmbeddings(
-            usage_tracker=usage_tracker,
+        return OpenAIEmbeddings(
             base_url=env.vllm_urls[index],
             api_key=env.vllm_api_keys[index],
             model=model_id,
@@ -62,7 +59,7 @@ def get_tokenizer(model_name: str) -> Tokenizer:
 
 
 class VLLMChatModel(ChatOpenAI):
-    
+
     def get_token_ids(self, text: str) -> list[int]:
         tokenizer = get_tokenizer(self.model_name)
         return tokenizer.encode(text).ids
@@ -76,7 +73,7 @@ class VLLMChatModel(ChatOpenAI):
         for msg in messages:
             # Message overhead (role, separators, etc.)
             total += 4
-            
+
             content = msg.content
             if isinstance(content, str):
                 total += len(self.get_token_ids(content))
@@ -86,11 +83,11 @@ class VLLMChatModel(ChatOpenAI):
                         total += len(self.get_token_ids(item['text']))
                     elif isinstance(item, str):
                         total += len(self.get_token_ids(item))
-        
+
         if tools:
             openai_tools = [convert_to_openai_tool(tool) for tool in tools]
             tools_json = json.dumps(openai_tools)
             total += len(self.get_token_ids(tools_json))
-        
+
         total += 2
         return total

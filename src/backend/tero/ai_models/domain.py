@@ -21,6 +21,7 @@ class LlmModelType(Enum):
 
 
 class LlmModelVendor(Enum):
+    AMAZON = 'AMAZON'
     ANTHROPIC = 'ANTHROPIC'
     GOOGLE = 'GOOGLE'
     OPENAI = 'OPENAI'
@@ -83,7 +84,7 @@ class AiModelProvider(ABC):
 
     def _prepare_chat_model(self, model: Any) -> BaseChatModel:
         model.verbose = True
-        model.callbacks=[StdOutCallbackHandler(), ConsoleCallbackHandler()] if not env.azure_app_insights_connection else []
+        model.callbacks=[StdOutCallbackHandler(), ConsoleCallbackHandler()]
         return model
 
     def build_streaming_chat_model(self, model: str, temperature: Optional[float]=None, reasoning_effort: Optional[str]=None) -> BaseChatModel:
@@ -101,7 +102,7 @@ class AiModelProvider(ABC):
     async def transcribe_audio(self, file: io.BytesIO, model: str) -> str:
         raise NotImplementedError("Transcription is not yet supported by this provider")
 
-    def build_embedding(self, model: str, usage_tracker: Callable[[int], None]) -> Embeddings:
+    def build_embedding(self, model: str) -> Embeddings:
         raise NotImplementedError("Embedding is not yet supported by this provider")
 
     def count_tokens(self, txt: str, model: str) -> int:

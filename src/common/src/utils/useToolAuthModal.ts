@@ -1,8 +1,8 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
-import { 
+import {
   toolAuthManager,
   ToolAuthType,
-  type AuthTokenRequestData, 
+  type AuthTokenRequestData,
   type AuthTokenResult,
   type ToolAuthCallbacks
 } from './toolAuth.js'
@@ -11,7 +11,7 @@ export function useToolAuthModal() {
   const showToolAuthModal = ref(false)
   const toolAuthType = ref<ToolAuthType>(ToolAuthType.TOKEN)
   const toolId = ref('')
-  
+
   let authTokenResolve: ((result: AuthTokenResult) => void) | null = null
   let oauthCancelCallback: (() => void) | null = null
 
@@ -46,12 +46,12 @@ export function useToolAuthModal() {
 
   const closeAuth = () => {
     showToolAuthModal.value = false
-    
+
     if (authTokenResolve) {
       authTokenResolve({ success: false, cancelled: true })
       authTokenResolve = null
     }
-    
+
     if (oauthCancelCallback) {
       oauthCancelCallback()
       oauthCancelCallback = null

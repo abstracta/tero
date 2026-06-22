@@ -18,8 +18,8 @@ from ..files.core import QuotaExceededError, add_encoding_to_content_type
 from ..files.domain import File, FileStatus, FileUpdate, FileMetadata, FileMetadataWithContent
 from ..files.repos import FileRepository
 from ..teams.domain import GLOBAL_TEAM_ID, Role
-from ..tools.core import AgentTool
 from ..tools.auth import ToolAuthRequestException, build_tool_auth_request_http_exception
+from ..tools.core import AgentTool
 from ..tools.repos import ToolRepository
 from ..users.domain import User
 from ..users.repos import UserRepository
@@ -117,7 +117,11 @@ async def remove_user_agent(agent_id: int, user: Annotated[User, Depends(get_cur
 @router.post(AGENTS_PATH, status_code=status.HTTP_201_CREATED)
 async def new_agent(user: Annotated[User, Depends(get_current_user)],
         db: Annotated[AsyncSession, Depends(get_db)]) -> PublicAgent:
-    ret = await AgentRepository(db).add(Agent(user_id=user.id, model_id=cast(str, env.agent_default_model), system_prompt=DEFAULT_SYSTEM_PROMPT))
+    ret = await AgentRepository(db).add(Agent(
+        user_id=user.id,
+        model_id=cast(str, env.agent_default_model),
+        system_prompt=DEFAULT_SYSTEM_PROMPT,
+    ))
     return PublicAgent.from_agent(ret, True)
 
 

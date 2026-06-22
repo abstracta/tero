@@ -2,7 +2,7 @@ from datetime import timezone
 import re
 import threading
 import time
-from typing import Any, Callable, cast
+from typing import Any, Callable, Optional, cast
 
 from sqlalchemy import select
 from sse_starlette import ServerSentEvent
@@ -13,7 +13,7 @@ from .common import find_last_message_id_for_thread
 from tero.agents.domain import AgentListItem
 from tero.files.domain import FileMetadata, FileProcessor, FileMetadataWithContent
 from tero.threads.api import THREADS_PATH, THREAD_PATH, THREAD_MESSAGES_PATH, THREAD_MESSAGE_PATH, THREAD_FILE_PATH
-from tero.threads.domain import ThreadListItem, ThreadMessageOrigin, ThreadMessagePublic
+from tero.threads.domain import MAX_THREAD_NAME_LENGTH, ThreadListItem, ThreadMessageOrigin, ThreadMessagePublic
 from tero.tools.core import AgentActionEvent, AgentAction
 from tero.usage.domain import Usage, UsageType
 
@@ -165,12 +165,22 @@ async def test_delete_deleted_thread(client: AsyncClient):
 async def test_add_thread_message(last_message_id: int, client: AsyncClient, session: AsyncSession):
     parent_message_id = await find_last_message_id_for_thread(THREAD_ID, session)
     async with add_message_to_thread(client, THREAD_ID,
-                                     "Which is the first natural number? Only provide the number", parent_message_id=parent_message_id) as resp:
+                                     "Which is the first natural number? Only provide the number. Don't ask follow up questions", parent_message_id=parent_message_id) as resp:
         await _assert_response(resp, "1", last_message_id + 1)
 
 
-async def _assert_response(resp: Response, response: str, user_message_id: int, minutes_saved: Optional[int] = None, stopped = False,
-                    send_pre_model_status: bool = True, status_updates: List[AgentActionEvent] = [], user_files: List[FileMetadata] = []):
+async def _assert_response(
+    response: Response,
+    expected_text: str,
+    user_message_id: int,
+    metadata_minutes_saved: Optional[int] = None,
+    message_updated_minutes_saved: Optional[int] = 0,
+    stopped: bool = False,
+    send_pre_model_status: bool = True,
+    status_updates: List[AgentActionEvent] = [],
+    ignore_status_updates: bool = False,
+    user_files: List[FileMetadata] = [],
+):
     buffer, events = [], []
     separator = "\r\n\r\n"
 
@@ -179,7 +189,7 @@ async def _assert_response(resp: Response, response: str, user_message_id: int, 
             events.append(f"data: {''.join(buffer)}{separator}".encode())
             buffer.clear()
 
-    async for chunk in resp.aiter_bytes():
+    async for chunk in response.aiter_bytes():
         decoded_chunk = chunk.decode()
         for event in decoded_chunk.split(separator):
             if event.startswith("data: "):
@@ -188,13 +198,17 @@ async def _assert_response(resp: Response, response: str, user_message_id: int, 
                 continue
             else:
                 flush_buffer()
-                if event.startswith("event: metadata") and minutes_saved is None:
-                    event = re.sub(r'"minutesSaved":\s*\d+,\s*', '', event)
                 if event.startswith("event: userMessage"):
                     event = re.sub(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z', r'\1', event)
                 if event: events.append(f"{event}{separator}".encode())
 
     flush_buffer()
+
+    if ignore_status_updates:
+        events = [e for e in events if not e.startswith(b"event: status")]
+    if message_updated_minutes_saved is None:
+        events = [e for e in events if not e.startswith(b"event: messageUpdated")]
+    events = [e for e in events if not e.startswith(b"event: threadUpdated")]
 
     expected_events = [
         ServerSentEvent(
@@ -204,31 +218,48 @@ async def _assert_response(resp: Response, response: str, user_message_id: int, 
                 "files": [f.model_dump(mode="json", by_alias=True) for f in user_files]
             })
         ).encode()]
-    if send_pre_model_status:
-        expected_events.append(
-            ServerSentEvent(
-                event="status",
-                data=str(json.dumps(AgentActionEvent(action=AgentAction.PRE_MODEL_HOOK).model_dump(mode="json", by_alias=True)))
-            ).encode())
-    if status_updates:
+    if not ignore_status_updates:
+        if send_pre_model_status:
+            expected_events.append(
+                ServerSentEvent(
+                    event="status",
+                    data=str(json.dumps(AgentActionEvent(action=AgentAction.PRE_MODEL_HOOK).model_dump(mode="json", by_alias=True)))
+                ).encode())
         for status_update in status_updates:
             expected_events.append(
                 ServerSentEvent(
                     event="status",
                     data=str(json.dumps(status_update.model_dump(mode="json", by_alias=True)))
                 ).encode())
-    if response:
-        expected_events.append(ServerSentEvent(data=response).encode())
+    if expected_text:
+        expected_events.append(ServerSentEvent(data=expected_text).encode())
+    answer_message_id = user_message_id + 1
     expected_events.append(
         ServerSentEvent(
             event="metadata",
             data=str(json.dumps({
-                "answerMessageId": user_message_id + 1,
+                "answerMessageId": answer_message_id,
                 "files": [],
-                **({"minutesSaved": minutes_saved} if minutes_saved is not None else {}),
+                "minutesSaved": metadata_minutes_saved,
                 "stopped": stopped
             }))).encode())
+    if message_updated_minutes_saved is not None:
+        expected_events.append(
+            ServerSentEvent(
+                event="messageUpdated",
+                data=str(json.dumps({
+                    "messageId": answer_message_id,
+                    "minutesSaved": message_updated_minutes_saved,
+                }))).encode())
     assert events == expected_events
+
+
+@freeze_time(CURRENT_TIME)
+async def test_add_thread_message_with_deep_agent(last_message_id: int, client: AsyncClient, session: AsyncSession):
+    parent_message_id = await find_last_message_id_for_thread(OTHER_THREAD_ID, session)
+    async with add_message_to_thread(client, OTHER_THREAD_ID,
+                                     "Which is the first natural number? Only provide the number", parent_message_id=parent_message_id) as resp:
+        await _assert_response(resp, "1", last_message_id + 1)
 
 
 @freeze_time(CURRENT_TIME)
@@ -236,7 +267,7 @@ async def test_add_thread_message_stopped_response(last_message_id: int, client:
     parent_message_id = await find_last_message_id_for_thread(THREAD_ID, session)
 
     def stop_with_delay_thread(loop, async_client):
-        time.sleep(0.2)
+        time.sleep(1.0)
         async def send_stop_request():
             await async_client.post(THREAD_PATH.format(thread_id=THREAD_ID) + "/stop")
         asyncio.run_coroutine_threadsafe(send_stop_request(), loop)
@@ -262,8 +293,8 @@ async def test_add_thread_message_stopped_response(last_message_id: int, client:
 
 @freeze_time(CURRENT_TIME)
 async def test_add_thread_message_with_reasoning_model(last_message_id: int, client: AsyncClient, session: AsyncSession):
-    parent_message_id = await find_last_message_id_for_thread(OTHER_THREAD_ID, session)
-    async with add_message_to_thread(client, OTHER_THREAD_ID,
+    parent_message_id = await find_last_message_id_for_thread(THREAD_ID, session)
+    async with add_message_to_thread(client, THREAD_ID,
                                      "Which is the first natural number? Only provide the number", parent_message_id=parent_message_id) as resp:
         await _assert_response(resp, "1", last_message_id + 1)
 
@@ -273,7 +304,7 @@ async def test_add_thread_message_with_edition_message(last_message_id: int, cli
     parent_message_id = await find_last_message_id_for_thread(THREAD_ID, session)
     async with add_message_to_thread(client, THREAD_ID,
                                      "Which is the first natural number? Only provide the number", parent_message_id=parent_message_id, isInAgentEdition=True) as resp:
-        await _assert_response(resp, "1", last_message_id + 1)
+        await _assert_response(resp, "1", last_message_id + 1, metadata_minutes_saved=0, message_updated_minutes_saved=None)
 
 
 async def test_add_message_in_invalid_thread(client: AsyncClient):
@@ -286,14 +317,14 @@ async def test_add_message_with_parent_id_from_another_thread(client: AsyncClien
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
 
 
-@pytest.mark.no_stub_estimate_minutes_saved
 @freeze_time(CURRENT_TIME)
+@pytest.mark.no_stub_estimate_minutes_saved
 async def test_thread_message_add_positive_feedback(last_message_id: int, client: AsyncClient, messages: List[ThreadMessagePublic], session: AsyncSession):
-    message_text = "Which is the first natural number? Only provide the number"
+    message_text = "Which is the first natural number? Only provide the number. Don't ask follow up questions"
     minutes_saved = 30
     parent_message_id = await find_last_message_id_for_thread(THREAD_ID, session)
     async with add_message_to_thread(client, THREAD_ID, message_text, parent_message_id=parent_message_id) as resp:
-        await _assert_response(resp, "1", last_message_id + 1)
+        await _assert_response(resp, "1", last_message_id + 1, message_updated_minutes_saved=None)
     await _update_thread_message(client, THREAD_ID, last_message_id + 2, {"hasPositiveFeedback": True, "minutesSaved": minutes_saved})
     resp = await _find_thread_messages(THREAD_ID, client)
     messages[0].children[0].children = _build_thread_messages_response(THREAD_ID, last_message_id + 1, parent_message_id, message_text, "1", CURRENT_TIME, True, minutes_saved)
@@ -301,15 +332,14 @@ async def test_thread_message_add_positive_feedback(last_message_id: int, client
 
 
 @pytest.mark.no_stub_estimate_minutes_saved
-@freeze_time(CURRENT_TIME)
 async def test_thread_message_minutes_saved_estimation_with_positive_feedback(last_message_id: int, client: AsyncClient, session: AsyncSession):
     minutes_saved = 8
     parent_message_id = await find_last_message_id_for_thread(THREAD_ID, session)
     async with add_message_to_thread(client, THREAD_ID, "Which is 1 + 1? Only provide the number", parent_message_id=parent_message_id) as resp:
-        await _assert_response(resp, "2", last_message_id + 1)
+        await _assert_response(resp, "2", last_message_id + 1, message_updated_minutes_saved=None)
     await _update_thread_message(client, THREAD_ID, last_message_id + 2, {"hasPositiveFeedback": True, "minutesSaved": minutes_saved})
     async with add_message_to_thread(client, THREAD_ID, "Which is 2 + 2? Only provide the number", parent_message_id=last_message_id + 2) as resp:
-        await _assert_response(resp, "4", last_message_id + 3, minutes_saved)
+        await _assert_response(resp, "4", last_message_id + 3, message_updated_minutes_saved=minutes_saved)
 
 
 async def _update_thread_message(client: AsyncClient, thread_id: int, message_id: int, body: dict[str, Any]) -> Response:
@@ -332,22 +362,21 @@ def _build_thread_messages_response(thread_id: int, message_id: int, parent_mess
     ]
 
 
-@pytest.mark.no_stub_estimate_minutes_saved
 @freeze_time(CURRENT_TIME)
+@pytest.mark.no_stub_estimate_minutes_saved
 async def test_thread_message_add_negative_feedback(last_message_id: int, client: AsyncClient, messages: List[ThreadMessagePublic], session: AsyncSession):
     message_text = "Which is the first natural number? Only provide the number"
     negative_feedback_text = "This is a negative feedback"
     minutes_saved = -15
     parent_message_id = await find_last_message_id_for_thread(THREAD_ID, session)
     async with add_message_to_thread(client, THREAD_ID, message_text, parent_message_id=parent_message_id) as resp:
-        await _assert_response(resp, "1", last_message_id + 1)
+        await _assert_response(resp, "1", last_message_id + 1, message_updated_minutes_saved=None)
     await _update_thread_message(client, THREAD_ID, last_message_id + 2, {"hasPositiveFeedback": False, "feedbackText": negative_feedback_text, "minutesSaved": minutes_saved})
     resp = await _find_thread_messages(THREAD_ID, client)
     messages[0].children[0].children = _build_thread_messages_response(THREAD_ID, last_message_id + 1, parent_message_id, message_text, "1", CURRENT_TIME, False, minutes_saved, negative_feedback_text)
     assert_response(resp, [messages[0]])
 
 
-@pytest.mark.no_stub_estimate_minutes_saved
 @freeze_time(CURRENT_TIME)
 async def test_thread_message_remove_feedback(last_message_id: int, client: AsyncClient, messages: List[ThreadMessagePublic], session: AsyncSession):
     message_text = "Which is the first natural number? Only provide the number"
@@ -357,7 +386,7 @@ async def test_thread_message_remove_feedback(last_message_id: int, client: Asyn
     await _update_thread_message(client, THREAD_ID, last_message_id + 2, {"hasPositiveFeedback": True, "minutesSaved": 30})
     await _update_thread_message(client, THREAD_ID, last_message_id + 2, {})
     resp = await _find_thread_messages(THREAD_ID, client)
-    messages[0].children[0].children = _build_thread_messages_response(THREAD_ID, last_message_id + 1, parent_message_id, message_text, "1", CURRENT_TIME, None, 1)
+    messages[0].children[0].children = _build_thread_messages_response(THREAD_ID, last_message_id + 1, parent_message_id, message_text, "1", CURRENT_TIME, None, 0)
     assert_response(resp, [messages[0]])
 
 
@@ -373,14 +402,28 @@ async def test_add_message_over_monthly_limit(client: AsyncClient, session: Asyn
         assert resp.status_code == status.HTTP_429_TOO_MANY_REQUESTS
 
 
+@pytest.mark.no_stub_build_thread_name
 async def test_thread_name_after_first_message(client: AsyncClient):
     resp = await create_thread(AGENT_ID, client)
     resp.raise_for_status()
     thread_id = resp.json().get("id")
-    await _add_message_to_thread(thread_id, "Hello", client)
-    resp = await _find_thread(thread_id, client)
-    resp.raise_for_status()
-    assert resp.json().get("name") is not None
+    async with add_message_to_thread(client, thread_id, "Hello") as stream_resp:
+        stream_resp.raise_for_status()
+        name = await _thread_name_from_sse_response(stream_resp)
+    assert name != f"Chat #{thread_id}"
+    assert 0 < len(name) <= MAX_THREAD_NAME_LENGTH
+
+
+async def _thread_name_from_sse_response(response: Response) -> str:
+    separator = "\r\n\r\n"
+    async for chunk in response.aiter_bytes():
+        for event in chunk.decode().split(separator):
+            if not event.startswith("event: threadUpdated"):
+                continue
+            for line in event.split("\r\n"):
+                if line.startswith("data: "):
+                    return json.loads(line[6:])["name"]
+    pytest.fail("No threadUpdated event in response")
 
 
 async def _add_message_to_thread(thread_id: int, message_text:str, client: AsyncClient,
@@ -415,7 +458,7 @@ async def test_edit_thread_message(last_message_id: int, messages: List[ThreadMe
     parent_id = 1
     await _add_message_to_thread(THREAD_ID, message_text, client, parent_id)
     res = await _find_thread_messages(THREAD_ID, client)
-    messages[0].children += _build_thread_messages_response(THREAD_ID, last_message_id + 1, parent_id, message_text, "1", CURRENT_TIME, None, 1)
+    messages[0].children += _build_thread_messages_response(THREAD_ID, last_message_id + 1, parent_id, message_text, "1", CURRENT_TIME, None, 0)
     assert_response(res, [*messages])
 
 
@@ -440,6 +483,7 @@ async def test_add_thread_message_with_attachment(last_message_id: int, client: 
     parent_message_id = await find_last_message_id_for_thread(THREAD_ID, session)
     async with add_message_to_thread(client, THREAD_ID, user_message, parent_message_id=parent_message_id, files=[file_path]) as resp:
         await _assert_response(resp, agent_response, last_message_id + 1,
+            ignore_status_updates=True,
             user_files=[FileMetadata(id=LAST_FILE_ID + 1, name=file_name, content_type=content_type, user_id=USER_ID, timestamp=CURRENT_TIME, status=FileStatus.PROCESSED, file_processor=FileProcessor.ENHANCED)])
 
 
@@ -451,6 +495,7 @@ async def test_add_thread_message_with_existing_file_attachment(last_message_id:
                                         parent_message_id=last_message_id + 2, file_ids=[file_id]) as resp:
         # we add 3 to message id since _add_thread_file adds 2 messages + 1 message that is the user message that generated this answer
         await _assert_response(resp, "Sample test", last_message_id + 3,
+            ignore_status_updates=True,
             user_files=[_build_sample_txt_thread_message_file(file_id)])
 
 

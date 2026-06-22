@@ -1,7 +1,6 @@
 import datetime
 import json
 import logging
-import traceback
 from typing import Optional, Annotated, Any, AsyncGenerator
 
 import aiohttp
@@ -9,11 +8,15 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OpenIdConnect
 from fastapi.security.utils import get_authorization_scheme_param
 from jose import JWTError, jwt
+from jose.exceptions import JWKError
 from sqlmodel.ext.asyncio.session import AsyncSession
 from starlette.requests import Request
 
 from .env import env
 from .repos import get_db
+from ..teams.repos import TeamRepository
+from ..teams.domain import TeamRole, Role, TeamRoleStatus, GLOBAL_TEAM_ID
+from ..api_keys.repos import ApiKeyRepository
 from ..users.domain import User
 from ..users.repos import UserRepository
 
@@ -92,13 +95,51 @@ async def _decode_token(token: str, openid_config: Annotated[OpenIdConfig, Depen
         return jwt.decode(token, new_keys, options=options)
 
 
+def to_utc_aware(value: datetime.datetime) -> datetime.datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=datetime.timezone.utc)
+    return value.astimezone(datetime.timezone.utc)
+
+
+def _decode_api_key_token(token: str) -> Optional[dict]:
+    try:
+        return jwt.decode(token, env.secret_encryption_key.get_secret_value(), algorithms=["HS256"])
+    except JWTError:
+        return None
+
+
+async def _try_api_key_auth(token: Optional[str], db: AsyncSession) -> User:
+    if not token:
+        raise _build_auth_exception()
+    payload = _decode_api_key_token(token)
+    if not payload or payload.get("source") != "api_key":
+        raise _build_auth_exception()
+    try:
+        user_id = int(payload["sub"])
+        api_key_id = int(payload["api_key_id"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise _build_auth_exception() from exc
+    api_key_repo = ApiKeyRepository(db)
+    api_key = await api_key_repo.find_by_id(api_key_id)
+    if not api_key:
+        raise _build_auth_exception()
+    if api_key.expires_at and to_utc_aware(api_key.expires_at) < datetime.datetime.now(datetime.timezone.utc):
+        raise _build_auth_exception()
+    ret = await UserRepository(db).find_by_id(user_id)
+    if not ret or not ret.is_active():
+        raise _build_auth_exception()
+    if env.allowed_users and ret.username not in env.allowed_users:
+        raise _build_auth_exception()
+    return ret
+
+
 async def get_current_user(token: Annotated[Optional[str], Depends(auth_scheme)],
         open_id_config: Annotated[Optional[OpenIdConfig], Depends(_get_openid_config)],
         db: Annotated[AsyncSession, Depends(get_db)]) -> User:
     try:
         if not token or not open_id_config:
-            logger.warning("No token or open_id_config could be found")
-            raise _build_auth_exception()
+            logger.debug("No token or open_id_config found, trying API key auth")
+            return await _try_api_key_auth(token, db)
         payload = await _decode_token(token, open_id_config)
         username = payload.get("email")
         if username is None:
@@ -119,10 +160,12 @@ async def get_current_user(token: Annotated[Optional[str], Depends(auth_scheme)]
             if deleted_user:
                 raise _build_auth_exception()
             ret = await user_repo.create_user(User(username=username, name=name, monthly_usd_limit=env.monthly_usd_limit_default))
+            if ret.id == 1:
+                await TeamRepository(db).save_team_role(TeamRole(user_id=ret.id, team_id=GLOBAL_TEAM_ID, role=Role.TEAM_OWNER, status=TeamRoleStatus.ACCEPTED))
         elif not ret.name and name:
             ret.name = name
             ret = await user_repo.update_user(ret)
         return ret
-    except JWTError as e:
-        traceback.print_exception(e)
-        raise _build_auth_exception()
+    except (JWTError, JWKError):
+        logger.debug("OIDC token validation failed, trying API key auth", exc_info=True)
+        return await _try_api_key_auth(token, db)

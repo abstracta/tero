@@ -78,7 +78,7 @@ export function generateChatHtml({ messages, agentName = 'Agent', chatName = 'Ch
     let i = 0
     messagesHtml = messagesHtml.replace(
       /<div class="echarts"[^>]*><\/div><div class="echarts-data"[^>]*>[\s\S]*?<\/div>/g,
-      () => i < chartImages.length ? `<img src="${chartImages[i++]}" style="max-width:100%;height:auto;">` : ''
+      () => i < chartImages.length ? `<div class="chart"><img src="${chartImages[i++]}" alt="chart"></div>` : ''
     )
   }
   return `<!DOCTYPE html>
@@ -136,7 +136,16 @@ header h1 { font-size: 1.25rem; font-weight: 600; color: var(--text); margin-bot
 .file-attachments { margin-top: 0.5rem; font-size: 0.875rem; color: var(--muted); }
 .file-tag { display: inline-block; background: #fff; border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.25rem 0.5rem; margin: 0.125rem; }
 
-.formatted-text img { max-width: 100%; height: auto; border-radius: 0.5rem; }
+.formatted-text img {
+  display: block;
+  max-width: min(100%, 800px);
+  width: auto;
+  height: auto;
+  max-height: 480px;
+  object-fit: contain;
+  margin: 0.5rem auto;
+  border-radius: 0.5rem;
+}
 .formatted-text { line-height: 1.375; }
 .formatted-text hr { display: none; }
 .formatted-text h1, .formatted-text h2 { font-size: 1.25rem; margin: 0.625rem 0; }
@@ -155,7 +164,7 @@ pre { margin: 0.75rem 0; }
 pre > div:first-child { display: flex; align-items: center; padding: 0.5rem; background: var(--bg); border: 1px solid var(--border); border-bottom: none; border-radius: 0.5rem 0.5rem 0 0; }
 pre > div:first-child > span { font-size: 0.75rem; text-transform: lowercase; color: var(--text); font-family: var(--font); }
 pre > code { display: block; padding: 0.5rem; background: var(--bg); border: 1px solid var(--border); border-radius: 0 0 0.5rem 0.5rem; overflow-x: auto; font-family: var(--mono); font-size: 0.875rem; line-height: 1.5; }
-.copy-code-btn { display: none; }
+pre > div:first-child > div { display: none; }
 
 table { border-collapse: collapse; width: 100%; }
 td, th { border: 1px solid var(--border); padding: 0.5rem 1rem; word-break: break-word; }
@@ -164,6 +173,9 @@ th { background: var(--bg); font-weight: 500; }
 button[onclick="downloadTableCSV(this)"] { display: none !important; }
 
 blockquote { display: flex; gap: 0.75rem; margin: 0.5rem 0; padding: 1.5rem; border-left: 8px solid var(--bg); }
+
+.chart { margin: 1rem 0; display: flex; justify-content: center; }
+.chart svg, .chart img { max-width: 100%; height: auto; }
 
 .status-container { margin-bottom: 0.5rem; border-bottom: 1px solid var(--border); overflow: hidden; }
 .status-header { padding: 0.5rem 0; font-size: 0.875rem; font-weight: 500; color: var(--muted); cursor: pointer; user-select: none; list-style: none; display: flex; align-items: center; justify-content: space-between; }

@@ -4,9 +4,10 @@ import MarkdownItPlantuml from 'markdown-it-plantuml'
 import Token from 'markdown-it/lib/token'
 import hljs from 'highlight.js'
 import { escapeHtml } from 'markdown-it/lib/common/utils'
-import copyIcon from '../assets/images/copy-icon.svg?raw'
-import csvIcon from '../assets/images/csv-icon.svg?raw'
-import { useCodeCopyHandler } from './useCodeCopyHandler'
+import copyIcon from '@tabler/icons/outline/copy.svg?raw'
+import downloadIcon from '@tabler/icons/outline/download.svg?raw'
+import csvIcon from '@tabler/icons/outline/file-download.svg?raw'
+import { useCodeActionHandler } from './useCodeActionHandler'
 import moment from 'moment'
 import * as echarts from 'echarts'
 import * as XLSX from 'xlsx'
@@ -149,15 +150,21 @@ export const renderMarkDown = (text: string, isComplete: boolean, t?: (key: stri
     highlight: function (str, lang) {
       if (lang) {
         const copyButtonText = t ? t('copyCodeButton') : 'Copy'
-        let code = `<pre class="b-1 my-3">
-        <div class="flex items-center justify-between p-2 bg-surface-muted border-t border-l border-r rounded-t-lg">
+        const downloadButtonText = t ? t('downloadCodeButton') : 'Download code'
+        let code = `<pre class="b-1 my-3"><div class="flex items-center justify-between p-2 bg-surface-muted border-t border-l border-r rounded-t-lg">
           <span class="text-xs lowercase text-content font-[sora]">${lang}</span>
-          <button class="copy-code-btn flex items-center text-xs text-content hover:text-dark transition">
-            ${copyIcon}
-            <span class="font-[sora]">${copyButtonText}</span>
-          </button>
-        </div>
-        <code class="block p-2 bg-surface-muted border rounded-b-lg overflow-x-auto">`.replace(/  |\r\n|\n|\r/gm, '')
+          <div class="flex items-center gap-2">
+            <button class="download-code-btn flex items-center gap-1 text-xs text-content hover:text-dark transition [&>svg]:w-4 [&>svg]:h-4" data-code-lang="${lang}">
+              ${downloadIcon}
+              <span class="font-[sora]">${downloadButtonText}</span>
+            </button>
+            <span class="text-content opacity-30">|</span>
+            <button class="copy-code-btn flex items-center text-xs text-content hover:text-dark transition [&>svg]:w-4 [&>svg]:h-4 w-18">
+              ${copyIcon}
+              <span class="font-[sora]">${copyButtonText}</span>
+            </button>
+          </div>
+        </div><code class="block p-2 bg-surface-muted border rounded-b-lg overflow-x-auto">`
         if (hljs.getLanguage(lang)) {
           try {
             code += hljs.highlight(str, { language: lang }).value
@@ -212,8 +219,8 @@ export const initializeResizeObserver = (element: HTMLElement | null): (() => vo
   }
 }
 
-export const initializeCodeCopyHandler = (t?: (key: string) => string): void => {
-  if (t) useCodeCopyHandler(t)
+export const initializeCodeActionHandler = (t?: (key: string) => string): void => {
+  if (t) useCodeActionHandler(t)
 }
 
 export function downloadTableCSV(button: HTMLElement) {

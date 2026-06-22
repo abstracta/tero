@@ -9,7 +9,7 @@ import { IconX } from '@tabler/icons-vue'
 
 const visible = defineModel<boolean>("visible")
 
-const props = defineProps<{ 
+const props = defineProps<{
   toolId: string
   authType: ToolAuthType
 }>()

@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { LlmModelVendor } from '@/services/api';
-import openAiIsotipo from '@/assets/images/openai-iso.svg?raw';
-import googleIsotipo from '@/assets/images/gemini-iso.svg?raw';
-import anthropicIsotipo from '@/assets/images/anthropic-iso.svg?raw';
-import qwenIsotipo from '@/assets/images/qwen-iso.svg?raw';
+import openAiIcon from '@/assets/images/openai.svg?raw';
+import googleIcon from '@/assets/images/gemini.svg?raw';
+import anthropicIcon from '@/assets/images/anthropic.svg?raw';
+import qwenIcon from '@/assets/images/qwen.svg?raw';
+import amazonIcon from '@/assets/images/nova.svg?raw';
 
 const vendorLogos: Record<LlmModelVendor, string> = {
-  [LlmModelVendor.OPENAI]: openAiIsotipo,
-  [LlmModelVendor.ANTHROPIC]: anthropicIsotipo,
-  [LlmModelVendor.GOOGLE]: googleIsotipo,
-  [LlmModelVendor.QWEN]: qwenIsotipo
+  [LlmModelVendor.OPENAI]: openAiIcon,
+  [LlmModelVendor.ANTHROPIC]: anthropicIcon,
+  [LlmModelVendor.GOOGLE]: googleIcon,
+  [LlmModelVendor.QWEN]: qwenIcon,
+  [LlmModelVendor.AMAZON]: amazonIcon
 };
 
 const props = defineProps<{

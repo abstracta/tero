@@ -10,6 +10,7 @@ from httpx import HTTPStatusError
 from langchain.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
+from mcp import ClientSession
 from mcp.shared.session import RequestResponder
 from mcp.types import ServerRequest, ClientResult, ServerNotification
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -113,7 +114,7 @@ class BaseMcpTool(AgentTool, abc.ABC):
         connections: Mapping[str, Any] = {connection_id: base_config}
         try:
             async with MultiServerMCPClient(connections).session(connection_id) as mcp_session:
-                tools = await load_mcp_tools(mcp_session)
+                tools = await self._build_tools(mcp_session)
                 self._tools = self._fix_tools_schemas(tools)
                 for tool in self._tools:
                     tool.callbacks = [StatusUpdateCallbackHandler(tool.name, description=tool.description)]
@@ -176,6 +177,9 @@ class BaseMcpTool(AgentTool, abc.ABC):
     def _auth_config(self, config: dict) -> dict:
         non_auth_keys = ["customHeaders"]
         return {k: v for k, v in config.items() if k not in non_auth_keys}
+
+    async def _build_tools(self, mcp_session: ClientSession) -> list[BaseTool]:
+        return await load_mcp_tools(mcp_session)
 
     def _fix_tools_schemas(self, tools: list[BaseTool]) -> list[BaseTool]:
         ret = []

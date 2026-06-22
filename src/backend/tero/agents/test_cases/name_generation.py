@@ -41,8 +41,7 @@ async def generate_test_case_name(
 
     message_usage = MessageUsage(user_id=user_id, agent_id=agent.id, model_id=model.id)
     try:
-        llm = ai_factory.build_chat_model(
-            model.id, env.internal_generator_temperature, env.internal_generator_reasoning_effort)
+        llm = ai_factory.build_internal_generator_chat_model(model)
         trimmed_user_message, trimmed_agent_message = _trim_messages_to_fit_model(
             user_message, agent_message, model, llm, agent
         )

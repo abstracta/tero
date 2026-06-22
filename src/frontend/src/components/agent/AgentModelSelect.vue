@@ -124,7 +124,7 @@ const baseCostModelName = computed(() => props.models.find((m) => m.isBaseCostMo
         <template #content>
           <div v-if="visibleOptions.length > 0" class="flex flex-row items-center gap-2">
             <div class="flex flex-col items-stretch w-full">
-              <div v-for="(option, index) in visibleOptions" :key="option.id" class="py-3" :class="[index < visibleOptions.length - 1 && 'border-b-2 border-dotted']">
+              <div v-for="(option, index) in visibleOptions" :key="option.id" class="py-3" :class="[!(showAllModels && index === visibleOptions.length - 1) && 'border-b-2 border-dotted']">
                 <div class="flex flex-row items-start gap-3 w-full">
                   <div class="w-36 shrink-0 pt-2 flex items-center gap-2 pl-2">
                     <VendorLogo v-if="option.id" :vendor="option.id as LlmModelVendor" />
@@ -142,7 +142,7 @@ const baseCostModelName = computed(() => props.models.find((m) => m.isBaseCostMo
                         <span v-if="optionItem.name" class="font-semibold">{{ optionItem.name }}</span>
                         <span v-if="optionItem.costMultiplier != null" v-tooltip="t('costRatioTooltip', { baseModel: baseCostModelName })" class="text-xs flex items-center gap-0.5 border p-0.5 pr-2 rounded-xl bg-surface font-semibold">
                           <IconCurrencyDollar class="w-4 h-4 text-content-muted" />
-                          x{{ optionItem.costMultiplier }}
+                          x{{ Number.isInteger(optionItem.costMultiplier) ? optionItem.costMultiplier : Number(optionItem.costMultiplier).toFixed(1) }}
                         </span>
                       </div>
                       <span>{{ optionItem.description }}</span>

@@ -50,10 +50,9 @@ class AzureProvider(AiModelProvider):
         )
         return response.text
 
-    def build_embedding(self, model: str, usage_tracker: Callable[[int], None]) -> AzureOpenAIEmbeddings:
+    def build_embedding(self, model: str) -> AzureOpenAIEmbeddings:
         deployment = env.azure_model_deployments[model]
-        return UsageTrackingAzureOpenAIEmbeddings(
-            usage_tracker=usage_tracker,
+        return AzureOpenAIEmbeddings(
             azure_endpoint=env.azure_endpoints[deployment.endpoint_index],
             azure_deployment=deployment.deployment_name,
             api_version=env.azure_api_version,

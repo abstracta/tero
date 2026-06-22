@@ -10,9 +10,9 @@ import { AgentPrompt } from '../../common/src/utils/domain'
 import { useToolAuthModal } from '@tero/common/utils/useToolAuthModal.js'
 
 const props = defineProps<{
-  messages: ChatMessage[], 
-  minimized?: boolean, 
-  agent: Agent, 
+  messages: ChatMessage[],
+  minimized?: boolean,
+  agent: Agent,
   audioTranscriber: (blob: Blob) => Promise<string>,
   errorHandler: (error: any) => void
 }>()
@@ -87,20 +87,20 @@ const adjustMessagesScroll = async () => {
         <ChatStarters v-if="messages.length === 0 && starterPrompts.length > 0" :prompts-starters="starterPrompts" :chat-input-ref="chatInputRef!" />
         <div class="h-full flex flex-col overflow-y-auto mb-4" ref="messagesDiv">
           <Message v-for="message in messages" :text="message.text" :is-user="message.isUser"
-            :is-complete="message.isComplete" :is-success="message.isSuccess" :agent="agent" 
+            :is-complete="message.isComplete" :is-success="message.isSuccess" :agent="agent"
             @prompt-create="chatInputRef?.createPromptFromMessage"/>
         </div>
         <ChatInput
           v-model="inputText"
           ref="chatInputRef"
-          :chat="{ 
-            supportsStopResponse: () => agent.supportsStopResponse(), 
+          :chat="{
+            supportsStopResponse: () => agent.supportsStopResponse(),
             findPrompts: async () => await findPrompts(),
             savePrompt: async (p: AgentPrompt) => await agent.savePrompt(p),
             deletePrompt: async (id: number) => await agent.deletePrompt(id),
-            supportsFileUpload: () => false, 
-            supportsTranscriptions: () => agent.supportsTranscriptions(), 
-            transcribe: async (blob: Blob) => audioTranscriber(blob), 
+            supportsFileUpload: () => false,
+            supportsTranscriptions: () => agent.supportsTranscriptions(),
+            transcribe: async (blob: Blob) => audioTranscriber(blob),
             handleError: errorHandler }"
           :is-answering="!!(lastMessage && !lastMessage.isComplete)"
           :enable-prompts="true"
@@ -110,8 +110,8 @@ const adjustMessagesScroll = async () => {
       </div>
     </template>
     <template v-slot:modalsContainer>
-      <ToolAuthModal 
-        v-model:visible="showToolAuthModal" 
+      <ToolAuthModal
+        v-model:visible="showToolAuthModal"
         :tool-id="toolId"
         :auth-type="toolAuthType"
         @submit="submitAuth"

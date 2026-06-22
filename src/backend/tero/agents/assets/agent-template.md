@@ -11,6 +11,16 @@ By {{ author }}
 | {{ key }} | `{{ value }}` |
 {% endfor %}
 
+{% if advanced_config %}
+## Advanced settings
+
+| | |
+|-|-|
+{% for key, value in advanced_config.items() %}
+| {{ key }} | `{{ value }}` |
+{% endfor %}
+
+{% endif %}
 ## Instructions
 
 <details>

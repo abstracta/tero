@@ -4,7 +4,7 @@ import { ChatUiMessage } from "./ChatMessage.vue";
 import { useI18n } from "vue-i18n";
 import type { Popover } from "primevue";
 import type { FormSubmitEvent } from "@primevue/forms";
-import { IconThumbUp, IconThumbDown, IconThumbUpFilled, IconThumbDownFilled, IconLoader, IconAlertTriangleFilled } from "@tabler/icons-vue";
+import { IconThumbUp, IconThumbDown, IconThumbUpFilled, IconThumbDownFilled, IconLoader } from "@tabler/icons-vue";
 import { UserFeedback } from "../../utils/domain";
 
 const props = defineProps<{
@@ -27,10 +27,19 @@ const getParentChainMinutesSaved = (message: ChatUiMessage): number => {
 }
 
 const parentMinutesSaved = computed(() => getParentChainMinutesSaved(props.message))
-const minutesSaved = computed(() => parentMinutesSaved.value + (props.message.minutesSaved ?? 0))
+const minutesSavedPending = computed(
+  () =>
+    !props.message.isComplete &&
+    props.message.minutesSaved === null &&
+    !props.message.stopped,
+)
+const minutesSaved = computed(() => {
+  if (props.message.minutesSaved == null) return null
+  return parentMinutesSaved.value + props.message.minutesSaved
+})
 
-const formValues = {
-  minutes: minutesSaved.value,
+const formValues: { minutes: number; feedbackText?: string } = {
+  minutes: minutesSaved.value ?? 0,
   feedbackText: props.message.feedbackText
 }
 const feedbackMesssage = ref<string>("");
@@ -40,7 +49,7 @@ const handleToggleFeedback = async ($event: MouseEvent, isPositive: boolean) => 
   isPositiveFeedback.value = isPositive;
   minutesSavedError.value = false;
   feedbackTextError.value = false;
-  formValues.minutes = minutesSaved.value;
+  formValues.minutes = minutesSaved.value ?? 0;
   formValues.feedbackText = props.message.feedbackText;
   if (feedbackPopRef.value) {
     feedbackPopRef.value.toggle($event);
@@ -76,7 +85,7 @@ const showFeedbackMessage = (message: string) => {
 }
 
 watch(props.message, (newMessage:ChatUiMessage) => {
-  formValues.minutes = minutesSaved.value;
+  formValues.minutes = minutesSaved.value ?? 0;
   formValues.feedbackText = newMessage.feedbackText;
 })
 
@@ -85,7 +94,10 @@ watch(props.message, (newMessage:ChatUiMessage) => {
 <template>
   <div :class="`${!actionsEnabled ? 'invisible' : ''}`" class="flex min-h-[30px]">
     <div class="flex w-full justify-end">
-      <div v-if="minutesSaved != null" class="flex items-center border-1 rounded-xl">
+      <div v-if="minutesSavedPending" class="flex items-center border-1 rounded-xl px-3 py-2">
+        <IconLoader class="!text-content animate-spin" />
+      </div>
+      <div v-else-if="minutesSaved != null || message.stopped" class="flex items-center border-1 rounded-xl">
         <div v-if="!feedbackMesssage" class="flex items-center gap-3 pl-3 p-2">
           <span class="text-content text-sm"> {{ t('responseSavedMessage') }} <span class="font-medium">{{minutesSaved}} {{ t(minutesSaved != 1 ? 'minutes':'minute')}}</span></span>
           <div v-if="message.hasPositiveFeedback == null" class="flex items-center gap-2">
@@ -96,15 +108,12 @@ watch(props.message, (newMessage:ChatUiMessage) => {
             <IconLoader v-if="isFeedbackLoading" class="!text-abstracta animate-spin"/>
             <SimpleIcon interactive v-else-if="message.hasPositiveFeedback" class="!text-abstracta"
               :icon="IconThumbUpFilled" v-tooltip.bottom="t('removeFeedbackButton')" @click="handleRemoveFeedback()"/>
-            <SimpleIcon interactive v-else class="!text-abstracta" 
+            <SimpleIcon interactive v-else class="!text-abstracta"
               :icon="IconThumbDownFilled" v-tooltip.bottom="t('removeFeedbackButton')" @click="handleRemoveFeedback()"/>
           </div>
         </div>
         <div v-else class="flex items-center h-6 px-3 py-5">
           <span class="text-content text-sm"> {{ feedbackMesssage }}</span>
-        </div>
-        <div v-if="message.stopped" class="flex items-center gap-2 border-l-1 p-2 rounded-xl overflow-auto">
-          <IconAlertTriangleFilled v-tooltip.bottom="t('stoppedMessage')" class="text-warn"/>
         </div>
         <Popover ref="feedbackPopRef" class="shadow-light" id="feedback-popover">
           <div class="flex flex-col gap-4">
@@ -139,8 +148,7 @@ watch(props.message, (newMessage:ChatUiMessage) => {
     "negativeFeedbackPlaceholder": "Please let us know how can we improve the answer",
     "thumbsUpButton": "Adjust time",
     "thumbsDownButton": "Not useful",
-    "removeFeedbackButton": "Remove feedback",
-    "stoppedMessage": "You stopped the response generation."
+    "removeFeedbackButton": "Remove feedback"
   },
   "es": {
     "responseSavedMessage": "Este chat te ahorró aprox.",
@@ -152,8 +160,7 @@ watch(props.message, (newMessage:ChatUiMessage) => {
     "feedbackThanksMessage": "¡Muchas gracias por tu feedback!",
     "thumbsUpButton": "Ajustar tiempo",
     "thumbsDownButton": "No me fue util",
-    "removeFeedbackButton": "Quitar feedback",
-    "stoppedMessage": "Detuviste la generación de la respuesta."
+    "removeFeedbackButton": "Quitar feedback"
   }
 }
 </i18n>

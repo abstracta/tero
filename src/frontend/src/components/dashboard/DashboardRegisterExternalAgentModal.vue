@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n';
 import { ExternalAgent } from '@/services/api';
 import { ApiService } from '@/services/api';
 import { useErrorHandler } from '@/composables/useErrorHandler'
-import externalAgentIcon from '@/assets/images/icon-external-agent.svg'
+import { IconCubeSpark } from '@tabler/icons-vue'
 
 const { t } = useI18n();
 const { handleError } = useErrorHandler();
@@ -173,7 +173,7 @@ watch(() => props.showModal, () => {
                             <div class="p-1">
                                 <div class="flex items-center gap-2 py-2 px-4 hover:bg-surface-muted cursor-pointer"
                                     @click="handleAddExternalAgent">
-                                    <img :src="externalAgentIcon" class="w-6 h-6" />
+                                    <IconCubeSpark class="w-6 h-6" />
                                     <span class="">{{ t('addExternalAgentItem', {
                                         toolName: selectedExternalAgent
                                     }) }}</span>

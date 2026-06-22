@@ -17,8 +17,7 @@ async def generate_agent_field(agent: Agent, field: AutomaticAgentField, user_id
     message_usage = MessageUsage(user_id=user_id, agent_id=agent.id, model_id=model.id)
     try:
         prompt = _build_prompt(agent, field)
-        llm = ai_factory.build_chat_model(
-            model.id, env.internal_generator_temperature, env.internal_generator_reasoning_effort)
+        llm = ai_factory.build_internal_generator_chat_model(model)
         response = await llm.ainvoke([HumanMessage(prompt)])
         response = cast(AIMessage, response)
         message_usage.increment_with_metadata(response.usage_metadata, model)

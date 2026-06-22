@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, FastAPI
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import Response
 from fastapi_mcp import AuthConfig, FastApiMCP
 import httpx
 
@@ -28,7 +28,11 @@ async def oauth_protected_resource_metadata():
 @mcp_server_router.get("/.well-known/oauth-authorization-server")
 async def oauth_authorization_server_forward():
     frontend_openid_url = env.frontend_openid_url or env.openid_url
-    return RedirectResponse(url=f"{frontend_openid_url}/.well-known/oauth-authorization-server")
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{frontend_openid_url}/.well-known/oauth-authorization-server", follow_redirects=True)
+        metadata = response.json()
+    metadata["scopes_supported"] = OPENID_SCOPES
+    return metadata
 
 
 # This is a workaround to allow the required-action page to load the css and js files

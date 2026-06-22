@@ -1,6 +1,6 @@
 # Discover Agents
 
-![Discover Agents](/screenshot.png)
+![Discover Agents](./img/discover.png)
 
 The **Explore agents** panel is your catalog of agents available in your Tero environment. Here you can see what others have shared, find the most used and latest agents, search for an agent, browse by team, review details of an agent and jump into a chat instantly.
 

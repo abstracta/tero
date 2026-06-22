@@ -7,7 +7,7 @@ import { useErrorHandler } from '@/composables/useErrorHandler'
 import { type Icon } from '@tabler/icons-vue'
 import { EditingToolConfig } from './AgentToolConfigEditor.vue'
 import { IconEditCircle, IconEye, IconX } from '@tabler/icons-vue'
-import { findToolIcon, buildToolConfigName } from '@tero/common/utils/toolConfig.js'
+import { findToolIcon, buildToolConfigName, mostUsedToolIds, toolIdKey } from '@tero/common/utils/toolConfig.js'
 import GroupedSelectPanel, { type GroupedSelectPanelOptionGroup } from '../common/GroupedSelectPanel.vue'
 
 const { t } = useI18n()
@@ -60,7 +60,8 @@ const hasConfigurableProperties = (toolId: string): boolean => {
 }
 
 const getToolById = (toolId: string): AgentTool => {
-  return availableTools.value.find((tool) => (tool.id.endsWith('-*') && toolId.startsWith(tool.id.split('-', 1)[0])) || tool.id === toolId)!
+  const key = toolIdKey(toolId)
+  return availableTools.value.find((tool) => toolIdKey(tool.id) === key)!
 }
 
 const onDeleteToolConfig = (toolConfig: AgentToolConfig) => {
@@ -86,7 +87,9 @@ const containerRef = ref<HTMLDivElement>()
 const groupedSelectPanelRef = ref<InstanceType<typeof GroupedSelectPanel>>()
 const showAllTools = ref(false)
 
-const initialToolsLimit = 4
+const isMostUsedTool = (toolId: string) => {
+  return mostUsedToolIds.includes(toolIdKey(toolId))
+}
 
 const groupedToolOptions = computed<GroupedSelectPanelOptionGroup[]>(() => {
   const q = searchQuery.value.trim().toLowerCase()
@@ -101,14 +104,33 @@ const groupedToolOptions = computed<GroupedSelectPanelOptionGroup[]>(() => {
   }))
 })
 
-const displayedToolOptions = computed(() => {
-  const list = groupedToolOptions.value
-  if (showAllTools.value || searchQuery.value.trim()) return list
-  if (list.length <= initialToolsLimit + 1) return list
-  return list.slice(0, initialToolsLimit)
+const isSearching = computed(() => !!searchQuery.value.trim())
+
+const mostUsedTools = computed(() => {
+  const filtered = groupedToolOptions.value.filter((t) => isMostUsedTool(t.id))
+  return filtered.sort((a, b) => mostUsedToolIds.indexOf(toolIdKey(a.id)) - mostUsedToolIds.indexOf(toolIdKey(b.id)))
 })
 
-const showLoadMoreTools = computed(() => !showAllTools.value && groupedToolOptions.value.length > initialToolsLimit + 1 && !searchQuery.value.trim())
+const otherTools = computed(() => {
+  const rest = groupedToolOptions.value.filter((t) => !isMostUsedTool(t.id))
+  return [...rest].sort((a, b) => a.name.localeCompare(b.name))
+})
+
+const toolSections = computed(() => {
+  if (isSearching.value) {
+    return [{ title: null, subtitle: null, items: groupedToolOptions.value }]
+  }
+  const sections: { title: string | null; subtitle: string | null; items: typeof groupedToolOptions.value }[] = []
+  if (mostUsedTools.value.length > 0) {
+    sections.push({ title: 'mostUsedToolsTitle', subtitle: null, items: mostUsedTools.value })
+  }
+  if ((showAllTools.value || mostUsedTools.value.length === 0) && otherTools.value.length > 0) {
+    sections.push({ title: 'otherToolsTitle', subtitle: 'sortedAlphabetically', items: otherTools.value })
+  }
+  return sections
+})
+
+const showLoadMoreTools = computed(() => !showAllTools.value && !isSearching.value && otherTools.value.length > 0 && mostUsedTools.value.length > 0)
 
 const onShowAllTools = () => {
   groupedSelectPanelRef.value?.onShowDropdown()
@@ -132,16 +154,24 @@ const onToolSearch = (value: string) => {
   <div class="flex items-center justify-between w-full mb-2 relative" v-if="!viewMode" ref="containerRef">
     <label class="!text-sm"> {{ t('toolsLabel') }} </label>
     <SimpleButton size="small" shape="square" class="px-3" @click="onShowAllTools"> <IconPlus /> {{ t('addTool') }} </SimpleButton>
-    <GroupedSelectPanel ref="groupedSelectPanelRef" :search-placeholder="t('searchPlaceholder')" :container="containerRef" :show-load-more="showLoadMoreTools" height="23rem" @search="onToolSearch" @load-more="showAllTools = true">
+    <GroupedSelectPanel ref="groupedSelectPanelRef" :search-placeholder="t('searchPlaceholder')" :container="containerRef" :show-load-more="showLoadMoreTools" @search="onToolSearch" @load-more="showAllTools = true">
       <template #content>
         <div v-if="groupedToolOptions.length > 0" class="flex flex-col w-full">
-          <div v-for="(option, index) in displayedToolOptions" :key="option.id" class="py-2" :class="[index < displayedToolOptions.length - 1 && 'border-b-2 border-dotted']">
-            <div class="flex hover:bg-surface-muted rounded-2xl p-4 px-2 cursor-pointer gap-4" @click="onToolChange(option.id)">
-              <div class="flex flex-row gap-2 w-30 shrink-0 items-center h-fit">
-                <component :is="findToolIcon(option.id)" />
-                <span class="font-semibold">{{ option.name }}</span>
+          <div v-for="(section, sIndex) in toolSections" :key="sIndex" class="flex flex-col w-full">
+            <div v-if="section.title" class="px-2 py-4 border-b flex justify-between items-center">
+              <h4 class="text-sm! font-semibold uppercase tracking-[0.2em]">
+                {{ t(section.title) }}
+              </h4>
+              <span v-if="section.subtitle" class="text-xs text-content-muted">{{ t(section.subtitle) }}</span>
+            </div>
+            <div v-for="(option, index) in section.items" :key="option.id" class="py-2" :class="[(index < section.items.length - 1 || showLoadMoreTools) && 'border-b-2 border-dotted']">
+              <div class="flex hover:bg-surface-muted rounded-2xl p-4 px-2 cursor-pointer gap-4" @click="onToolChange(option.id)">
+                <div class="flex flex-row gap-2 w-35 shrink-0 items-center h-fit">
+                  <component :is="findToolIcon(option.id)" />
+                  <span class="font-semibold">{{ option.name }}</span>
+                </div>
+                <span v-if="option.description" class="flex-1">{{ option.description }}</span>
               </div>
-              <span v-if="option.description" class="flex-1">{{ option.description }}</span>
             </div>
           </div>
         </div>
@@ -190,7 +220,10 @@ const onToolSearch = (value: string) => {
     "deleteToolConfig": "Remove",
     "deleteToolConfigConfirmation": "Remove?",
     "searchPlaceholder": "Search tools...",
-    "noOptionsPlaceholder": "No tools found"
+    "noOptionsPlaceholder": "No tools found",
+    "mostUsedToolsTitle": "Most used",
+    "otherToolsTitle": "Other tools",
+    "sortedAlphabetically": "Sorted alphabetically"
   },
   "es": {
     "toolsLabel": "Herramientas",
@@ -201,7 +234,10 @@ const onToolSearch = (value: string) => {
     "deleteToolConfig": "Quitar",
     "deleteToolConfigConfirmation": "¿Quitar?",
     "searchPlaceholder": "Buscar herramientas...",
-    "noOptionsPlaceholder": "No se encontraron herramientas"
+    "noOptionsPlaceholder": "No se encontraron herramientas",
+    "mostUsedToolsTitle": "Más usadas",
+    "otherToolsTitle": "Otras herramientas",
+    "sortedAlphabetically": "Ordenadas alfabéticamente"
   }
 }
 </i18n>

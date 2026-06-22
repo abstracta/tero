@@ -2,8 +2,11 @@
 @include: ./web.md
 @include: ./browser.md
 @include: ./jira.md
+@include: ./azure-devops.md
+@include: ./zephyr.md
 @include: ./github.md
 @include: ./youtrack.md
 @include: ./practitest.md
 @include: ./redmine.md
 @include: ./mcp.md
+@include: ./sql.md

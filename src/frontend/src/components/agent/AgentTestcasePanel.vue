@@ -7,7 +7,7 @@ import { AgentTestcaseChatUiMessage } from './AgentTestcaseChatMessage.vue';
 import AgentTestcaseInput from './AgentTestcaseInput.vue';
 import { useErrorHandler } from '@/composables/useErrorHandler';
 import { AnimationEffect } from '../../../../common/src/utils/animations';
-import { renderMarkDown } from '../../../../common/src/utils/formatter';
+import { initializeCodeActionHandler, renderMarkDown } from '../../../../common/src/utils/formatter';
 import { useTestExecutionStore } from '@/composables/useTestExecutionStore';
 import { useTestCaseStore } from '@/composables/useTestCaseStore';
 import { IconArrowLeft, IconPencil, IconLoader2, IconSquareCheckFilled, IconSquareXFilled, IconSquareChevronsRightFilled } from '@tabler/icons-vue';
@@ -61,6 +61,7 @@ const executionState = computed(() => {
 })
 
 onMounted(async () => {
+    initializeCodeActionHandler(t)
     isLoading.value = true
     try {
         if (testCaseId.value) {
@@ -662,7 +663,7 @@ defineExpose({
         "successDescription": "The agent's response matched the expected output. No formatting or content deviations were detected.",
         "failureDescription": "The agent's response did not match the expected output. Formatting or content deviations were detected.",
         "errorDescription": "An error occurred while running the test case",
-        "recursionLimitExceededDescription": "The step limit for this response was reached. Try a shorter task or break your request into smaller parts. You can review the thought process to improve the use of the agent and avoid steps that you identify as unnecessary.",
+        "recursionLimitExceededDescription": "The step limit for this response was reached. Try a shorter task or break your request into smaller parts. You can review the thought process to improve the use of the agent and avoid steps that you identify as unnecessary. To increase the limit, go to the agent settings and adjust the thought process steps limit.",
         "runningTestCase": "Running: {testCaseName}",
         "testCaseResult": "Test case result: {testCaseName}",
         "testRunning": "Test is running...",
@@ -692,7 +693,7 @@ defineExpose({
         "successDescription": "La respuesta del agente coincidió con la salida esperada. No se detectaron desvíos de formato o contenido.",
         "failureDescription": "La respuesta del agente no coincidió con la salida esperada. Se detectaron desvíos de formato o contenido.",
         "errorDescription": "Ocurrió un error al ejecutar el test case",
-        "recursionLimitExceededDescription": "Se alcanzó el límite de pasos de esta respuesta. Intenta con una tarea más corta o divide la solicitud en partes más pequeñas. Puedes revisar el proceso de pensamiento para mejorar el uso del agente y evitar pasos que identifiques que no sean necesarios.",
+        "recursionLimitExceededDescription": "Se alcanzó el límite de pasos de esta respuesta. Intenta con una tarea más corta o divide la solicitud en partes más pequeñas. Puedes revisar el proceso de pensamiento para mejorar el uso del agente y evitar pasos que identifiques que no sean necesarios. Para aumentar el límite, ve a la configuración del agente y ajusta el límite de pasos del proceso de pensamiento.",
         "runningTestCase": "Ejecutando: {testCaseName}",
         "testCaseResult": "Resultado del test case: {testCaseName}",
         "testRunning": "El test está ejecutándose...",

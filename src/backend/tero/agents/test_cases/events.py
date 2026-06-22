@@ -29,20 +29,13 @@ class SuiteStatusChange:
     status: TestSuiteRunStatus
 
 
-def _get_db_url() -> str:
-    # SQLModel has no support for PostgreSQL LISTEN/NOTIFY, so we use psycopg directly.
-    # psycopg requires a plain PostgreSQL URL without SQLAlchemy's async driver prefixes.
-    url = repos.engine.url.render_as_string(hide_password=False)
-    return url.replace("+psycopg", "").replace("+asyncpg", "")
-
-
 async def _listen_to_channel(
     channel: str,
     stop_event: asyncio.Event,
     transform: Callable[[Dict[str, Any]], T],
     timeout
 ) -> AsyncIterator[Optional[T]]:
-    db_url = _get_db_url()
+    db_url = repos.plain_postgresql_url()
 
     try:
         async with await psycopg.AsyncConnection.connect(db_url, autocommit=True) as conn:

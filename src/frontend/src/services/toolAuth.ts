@@ -1,10 +1,10 @@
 import { HttpError, ApiService } from "@/services/api";
-import { 
+import {
   createAuthFlowHandler,
-  OAuthRequest, 
+  OAuthRequest,
   AuthenticationError,
   toolAuthManager,
-  type HttpErrorLike 
+  type HttpErrorLike
 } from "@tero/common/utils/toolAuth.js";
 
 const isHttpError = (e: any): e is HttpErrorLike => {

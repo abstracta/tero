@@ -29,6 +29,11 @@ class BaseAgent(CamelCaseModel, abc.ABC):
         self.name = f"Agent #{self.id}"
 
 
+class AgentType(str, Enum):
+    DEEP_AGENT = "DEEP_AGENT"
+    REACT_AGENT = "REACT_AGENT"
+
+
 class AgentUpdate(CamelCaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
@@ -41,6 +46,7 @@ class AgentUpdate(CamelCaseModel):
     publish_prompts: Optional[bool] = None
     team_id: Optional[int] = None
     is_protected: Optional[bool] = None
+    agent_type: Optional[AgentType] = None
 
 
 class Agent(BaseAgent, table=True):
@@ -61,6 +67,7 @@ class Agent(BaseAgent, table=True):
     team: Optional[Team] = Relationship()
     evaluator_id: Optional[int] = Field(default=None, foreign_key="evaluator.id")
     is_protected: bool = Field(default=False)
+    agent_type: AgentType = Field(default=AgentType.REACT_AGENT)
 
     def update_with(self, update: AgentUpdate):
         update_dict = update.model_dump(exclude_none=True)
@@ -139,6 +146,7 @@ class PublicAgent(BaseAgent):
     recursion_limit: Optional[int] = None
     user: Optional[UserListItem] = None
     team: Optional[Team] = None
+    agent_type: AgentType = AgentType.REACT_AGENT
 
     @staticmethod
     def from_agent(a: Agent, can_edit: bool) -> 'PublicAgent':

@@ -52,6 +52,7 @@ export enum LlmModelType {
 }
 
 export enum LlmModelVendor {
+  AMAZON = 'AMAZON',
   OPENAI = 'OPENAI',
   ANTHROPIC = 'ANTHROPIC',
   GOOGLE = 'GOOGLE',
@@ -63,7 +64,8 @@ export const llmModelVendorDisplayName: Record<LlmModelVendor, string> = {
   [LlmModelVendor.OPENAI]: 'OpenAI',
   [LlmModelVendor.ANTHROPIC]: 'Anthropic',
   [LlmModelVendor.GOOGLE]: 'Google',
-  [LlmModelVendor.QWEN]: 'Qwen'
+  [LlmModelVendor.QWEN]: 'Qwen',
+  [LlmModelVendor.AMAZON]: 'Amazon'
 }
 
 export class LlmModel {
@@ -98,6 +100,11 @@ export enum ReasoningEffort {
   LOW = 'LOW',
   MEDIUM = 'MEDIUM',
   HIGH = 'HIGH'
+}
+
+export enum AgentType {
+  DEEP_AGENT = 'DEEP_AGENT',
+  REACT_AGENT = 'REACT_AGENT'
 }
 
 export class Evaluator {
@@ -216,8 +223,9 @@ export class Agent {
   team?: Team
   fileProcessor?: FileProcessor
   isProtected: boolean
+  agentType: AgentType
 
-  constructor(id: number, name?: string, description?: string, icon?: string, systemPrompt?: string, modelId?: string, temperature?: LlmTemperature, recursionLimit?: number, activeUsers?: number, lastUpdate?: Date, user?: User, canEdit?: boolean, team?: Team, fileProcessor?: FileProcessor, isProtected: boolean = false) {
+  constructor(id: number, name?: string, description?: string, icon?: string, systemPrompt?: string, modelId?: string, temperature?: LlmTemperature, recursionLimit?: number, activeUsers?: number, lastUpdate?: Date, user?: User, canEdit?: boolean, team?: Team, fileProcessor?: FileProcessor, isProtected: boolean = false, agentType: AgentType = AgentType.REACT_AGENT) {
     this.id = id
     this.name = name
     this.description = description
@@ -233,6 +241,7 @@ export class Agent {
     this.team = team
     this.fileProcessor = fileProcessor
     this.isProtected = isProtected
+    this.agentType = agentType
   }
 }
 
@@ -240,8 +249,8 @@ export class AgentUpdate extends Agent {
   publishPrompts?: boolean
   teamId?: number | null
 
-  constructor(id: number, name?: string, description?: string, icon?: string, systemPrompt?: string, modelId?: string, temperature?: LlmTemperature, recursionLimit?: number, activeUsers?: number, lastUpdate?: Date, user?: User, canEdit?: boolean, publishPrompts?: boolean, teamId?: number, fileProcessor?: FileProcessor) {
-    super(id, name, description, icon, systemPrompt, modelId, temperature, recursionLimit, activeUsers, lastUpdate, user, canEdit, undefined, fileProcessor)
+  constructor(id: number, name?: string, description?: string, icon?: string, systemPrompt?: string, modelId?: string, temperature?: LlmTemperature, recursionLimit?: number, activeUsers?: number, lastUpdate?: Date, user?: User, canEdit?: boolean, publishPrompts?: boolean, teamId?: number | null, fileProcessor?: FileProcessor, isProtected?: boolean, agentType?: AgentType) {
+    super(id, name, description, icon, systemPrompt, modelId, temperature, recursionLimit, activeUsers, lastUpdate, user, canEdit, undefined, fileProcessor, isProtected, agentType)
     this.publishPrompts = publishPrompts
     this.teamId = teamId
   }
@@ -1110,6 +1119,15 @@ export class ApiService {
               stopped: part.data.stopped
             }
           }
+        } else if (part.event == 'messageUpdated') {
+          yield {
+            messageUpdated: {
+              messageId: part.data.messageId,
+              minutesSaved: part.data.minutesSaved
+            }
+          }
+        } else if (part.event == 'threadUpdated') {
+          yield { threadUpdated: { name: part.data.name } }
         } else if (part.event == 'status') {
           yield {
             status: {
@@ -1260,6 +1278,13 @@ export class ThreadMessagePart {
     files: UploadedFile[],
     minutesSaved?: number
     stopped?: boolean
+  }
+  messageUpdated?: {
+    messageId: number
+    minutesSaved: number
+  }
+  threadUpdated?: {
+    name: string
   }
   status?: {
     action: string

@@ -19,6 +19,10 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
+def plain_postgresql_url() -> str:
+    return engine.url.set(drivername="postgresql").render_as_string(hide_password=False)
+
+
 # this method allows to easily cast a query to SelectOfScalar to avoid type errors when using sqlmodel exec method
 # for example when using delete statements
 # this is related to https://github.com/fastapi/sqlmodel/issues/909
@@ -34,16 +38,15 @@ def attr(val: Any) -> QueryableAttribute:
 class _EncryptedStrTypeDecorator(TypeDecorator):
     impl = String
     cache_ok = True
-    
-    def __init__(self, *args, **kwargs):
-        self._cipher = Fernet(env.secret_encryption_key.get_secret_value().encode())
-        super().__init__(*args, **kwargs)
-    
+
+    def _get_cipher(self) -> Fernet:
+        return Fernet(env.secret_encryption_key.get_secret_value().encode())
+
     def process_bind_param(self, value: Optional[str], dialect: Dialect) -> Optional[str]:
-        return self._cipher.encrypt(value.encode()).decode() if value is not None else None
-    
+        return self._get_cipher().encrypt(value.encode()).decode() if value is not None else None
+
     def process_result_value(self, value: Optional[str], dialect: Dialect) -> Optional[str]:
-        return self._cipher.decrypt(value.encode()).decode() if value is not None else None
+        return self._get_cipher().decrypt(value.encode()).decode() if value is not None else None
 
 
 def EncryptedField(nullable: bool = False, default: Optional[str] = None, **kwargs) -> Field: # type: ignore[reportUnknownReturnType]

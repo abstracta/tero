@@ -6,7 +6,7 @@ from .common import *
 
 from tero.agents.api import AGENTS_PATH, AGENT_PIN_PATH, AGENT_PATH, AGENT_TOOL_PATH, AGENT_TOOLS_PATH, \
     AGENT_TOOL_FILE_PATH
-from tero.agents.domain import PublicAgent, AgentToolConfig, AutomaticAgentField, LlmTemperature, ReasoningEffort, AgentUpdate, AgentListItem
+from tero.agents.domain import PublicAgent, AgentToolConfig, AutomaticAgentField, LlmTemperature, ReasoningEffort, AgentUpdate, AgentListItem, AgentType
 from tero.agents.prompts.api import AGENT_PROMPTS_PATH
 from tero.agents.prompts.domain import AgentPromptPublic, AgentPrompt
 from tero.files.domain import FileMetadata, FileStatus, FileProcessor
@@ -155,6 +155,16 @@ async def _update_agent(agent_id: int, update: AgentUpdate, client: AsyncClient)
 
 async def _find_agent(agent_id: int, client: AsyncClient) -> Response:
     return await client.get(AGENT_PATH.format(agent_id=agent_id))
+
+
+async def test_update_agent_type(client: AsyncClient):
+    resp = await _update_agent(AGENT_ID, AgentUpdate(agent_type=AgentType.DEEP_AGENT), client)
+    resp.raise_for_status()
+    assert resp.json()["agentType"] == AgentType.DEEP_AGENT.value
+
+    resp = await _update_agent(AGENT_ID, AgentUpdate(agent_type=AgentType.REACT_AGENT), client)
+    resp.raise_for_status()
+    assert resp.json()["agentType"] == AgentType.REACT_AGENT.value
 
 
 async def test_update_non_editable_agent(client: AsyncClient):
@@ -462,7 +472,8 @@ async def test_clone_agent(users: dict[int, UserListItem], last_agent_id: int,cl
         temperature=LlmTemperature.CREATIVE,
         reasoning_effort=ReasoningEffort.LOW,
         recursion_limit=20,
-        user=users[0]
+        user=users[0],
+        agent_type=AgentType.DEEP_AGENT
     ))
 
 
