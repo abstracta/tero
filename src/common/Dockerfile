@@ -2,7 +2,7 @@ FROM node:23 AS common-builder
 
 WORKDIR /app
 
-RUN npm install -g pnpm
+RUN npm install -g pnpm@10
 
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 
