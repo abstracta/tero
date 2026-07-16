@@ -1,0 +1,30 @@
+{
+  "name": "@tero/cli",
+  "version": "0.1.0",
+  "description": "Tero CLI - Authenticate and chat with agents from the terminal",
+  "type": "module",
+  "bin": {
+    "tero": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:bin": "sh scripts/build.sh",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "echarts": "^6.0.0",
+    "highlight.js": "^11.11.1",
+    "linkedom": "^0.18.12",
+    "markdown-it": "^13.0.2",
+    "markdown-it-plantuml": "^1.4.1"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^13.0.9",
+    "@types/node": "^22.16.0",
+    "esbuild": "^0.28.0",
+    "tsx": "^4.19.0",
+    "typescript": "~5.7.3"
+  }
+}

@@ -3,7 +3,7 @@ import { ref, onMounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useErrorHandler } from '@/composables/useErrorHandler'
-import { initializeCodeCopyHandler, renderMarkDown } from '../../../common/src/utils/formatter'
+import { initializeCodeActionHandler, renderMarkDown } from '../../../common/src/utils/formatter'
 import { FileStatus } from '../../../common/src/utils/domain'
 import { AgentToolConfig, ApiService, DocToolFile, FileProcessor, findManifest } from '@/services/api'
 
@@ -84,7 +84,7 @@ const fileIsImage = computed(() => {
 })
 
 onMounted(async () => {
-  initializeCodeCopyHandler(t)
+  initializeCodeActionHandler(t)
   await loadFilePreview()
   await checkUserCanReprocess()
 })
@@ -281,8 +281,9 @@ const awaitFileProcessingCompletes = async (toolFile: DocToolFile) => {
     "filePreviewNotAvailable": "File preview not available",
     "filePreviewDescription": "You can download the file to view it in a compatible application.",
     "downloadFile": "Download",
-    "copyCodeButton": "Copy code",
+    "copyCodeButton": "Copy",
     "copiedMessage": "Copied!",
+    "downloadCodeButton": "Download",
     "processingModeBasicTooltip": "Basic processing uses a simple algorithm to extract the content of the file. In general it is less accurate but it is faster and consumes less budget.",
     "processingModeEnhancedTooltip": "Enhanced processing uses AI to extract the content of the file. In general it is more accurate but it consumes more budget and it may take longer to process.",
     "closeFilePreviewTooltip": "Close file preview"
@@ -302,8 +303,9 @@ const awaitFileProcessingCompletes = async (toolFile: DocToolFile) => {
     "filePreviewNotAvailable": "Vista previa de archivo no disponible",
     "filePreviewDescription": "Puedes descargar el archivo para verlo en una aplicación compatible.",
     "downloadFile": "Descargar",
-    "copyCodeButton": "Copiar código",
+    "copyCodeButton": "Copiar",
     "copiedMessage": "Copiado!",
+    "downloadCodeButton": "Descargar",
     "processingModeBasicTooltip": "El procesamiento básico utiliza un algoritmo simple para extraer el contenido del archivo. En general es menos preciso pero es más rápido y consume menos presupuesto.",
     "processingModeEnhancedTooltip": "El procesamiento mejorado utiliza IA para extraer el contenido del archivo. En general es más preciso pero consume más presupuesto y puede tardar más en procesarse.",
     "closeFilePreviewTooltip": "Cerrar vista previa de archivo"

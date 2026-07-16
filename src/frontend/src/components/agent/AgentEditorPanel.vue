@@ -2,7 +2,7 @@
 import { onMounted, ref, computed, watch } from 'vue'
 import { useRoute, onBeforeRouteUpdate, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Agent, ApiService, HttpError, LlmModel, AgentToolConfig, AutomaticAgentField, Team, TestCase, TestSuiteRun, GLOBAL_TEAM_ID, Role, TeamRoleStatus, findManifest, type AgentImportResult } from '@/services/api'
+import { Agent, AgentType, ApiService, HttpError, LlmModel, AgentToolConfig, AutomaticAgentField, Team, TestCase, TestSuiteRun, GLOBAL_TEAM_ID, Role, TeamRoleStatus, findManifest, type AgentImportResult } from '@/services/api'
 import { IconPencil, IconListDetails, IconLock, IconDeviceFloppy, IconPackageExport, IconPackageImport } from '@tabler/icons-vue'
 import { useErrorHandler } from '@/composables/useErrorHandler'
 import { useAgentStore } from '@/composables/useAgentStore'
@@ -79,6 +79,10 @@ const collapsed = ref({
   advancedSettings: true,
 })
 const RECURSION_LIMIT_OPTIONS = [20, 40, 60, 80, 100]
+const AGENT_TYPE_OPTIONS = [
+  { label: t('agentTypeBasicAgent'), value: AgentType.REACT_AGENT },
+  { label: t('agentTypeAdvancedAgent'), value: AgentType.DEEP_AGENT }
+]
 const lastSavedAt = ref<Date | null>(null)
 const isGlobalOwner = ref(false)
 
@@ -372,6 +376,12 @@ const onUpdateProtectedSettings = async (value: boolean) => {
   await updateAgent()
 }
 
+const onUpdateAgentType = async (value: AgentType) => {
+  if (!agent.value) return
+  agent.value.agentType = value
+  await updateAgent()
+}
+
 const onSelectExecution = (execution: TestSuiteRun) => {
   emit('selectExecution', execution)
   showPastExecutions.value = false
@@ -549,6 +559,20 @@ const onGenerate = async () => {
                 </div>
                 <p class="text-content-muted text-sm tool-message mb-2 whitespace-pre-line">{{ t('protectedConfigurationHelp') }}</p>
               </div>
+              <div class="form-field flex flex-col gap-2 mb-6">
+                <label for="agentType">{{ t('agentType') }}</label>
+                <SelectButton
+                  id="agentType"
+                  :model-value="agent.agentType"
+                  :options="AGENT_TYPE_OPTIONS"
+                  option-label="label"
+                  option-value="value"
+                  :allow-empty="false"
+                  @update:model-value="onUpdateAgentType"
+                  class="w-fit"
+                />
+                <p class="text-content-muted text-sm tool-message whitespace-pre-line">{{ t('agentTypeHelp') }}</p>
+              </div>
               <div class="form-field flex flex-col gap-1">
                 <label for="recursionLimit">{{ t('recursionLimit') }}</label>
                 <SelectButton
@@ -671,6 +695,10 @@ const onGenerate = async () => {
     "protectedConfiguration": "Protected configuration",
     "protectedConfigurationHelp": "When enabled, others can’t view, clone, or modify this agent’s configuration.",
     "protected": "Protected",
+    "agentType": "Agent mode",
+    "agentTypeBasicAgent": "Basic",
+    "agentTypeAdvancedAgent": "Advanced",
+    "agentTypeHelp": "Basic — faster responses for chat, drafting, and simple tasks. Best default for most agents.\nAdvanced — for complex multi-step work: offloads large context to files, summarizes long conversations, and tracks subtasks; useful when the agent relies heavily on tools or long-running workflows.",
     "recursionLimit": "Thought process steps limit",
     "recursionLimitHelpLine1": "Higher values increase budget usage and response time.",
     "recursionLimitHelpLine2": "Before increasing, optimize your agent to use fewer steps.",
@@ -726,6 +754,10 @@ const onGenerate = async () => {
     "protectedConfiguration": "Configuración protegida",
     "protectedConfigurationHelp": "Cuando está habilitada, otros no pueden ver, clonar ni modificar la configuración de este agente.",
     "protected": "Protegido",
+    "agentType": "Modo del agente",
+    "agentTypeBasicAgent": "Básico",
+    "agentTypeAdvancedAgent": "Avanzado",
+    "agentTypeHelp": "Básico — respuestas más rápidas para chat, redacción y tareas simples. Mejor opción por defecto para la mayoría de los agentes.\nAvanzado — para trabajo complejo en varios pasos: transfiere contexto extenso a archivos, resume conversaciones largas y rastrea subtareas; útil cuando el agente usa muchas herramientas o flujos prolongados.",
     "recursionLimit": "Límite de pasos del proceso de pensamiento",
     "recursionLimitHelpLine1": "Valores más altos aumentan el uso de presupuesto y el tiempo de respuesta.",
     "recursionLimitHelpLine2": "Antes de aumentar, optimiza tu agente para usar menos pasos.",

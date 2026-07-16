@@ -14,11 +14,14 @@ from tero.agents.api import AGENT_TOOL_FILE_PATH
 from tero.tools.browser import BrowserTool, BROWSER_TOOL_ID
 from tero.tools.docs import DocsTool, DOCS_TOOL_ID
 from tero.tools.jira import JiraTool
+from tero.tools.azure_devops import AzureDevOpsTool
+from tero.tools.zephyr import ZephyrTool
 from tero.tools.redmine import RedmineTool
 from tero.tools.github import GitHubTool
 from tero.tools.youtrack import YouTrackTool
 from tero.tools.practitest import PractiTestTool
 from tero.tools.mcp import McpTool
+from tero.tools.sql import SqlTool
 from tero.tools.web import WebTool, WEB_TOOL_ID
 from tero.usage.domain import Usage, UsageType
 
@@ -39,7 +42,7 @@ def stub_web_tool_tavily_ainvoke():
 
 async def test_find_tools(client: AsyncClient, session: AsyncSession):
     resp = await client.get(f"{BASE_PATH}/tools")
-    expected_tools = [DocsTool(), McpTool(), JiraTool(), BrowserTool(), GitHubTool(), YouTrackTool(), PractiTestTool(), RedmineTool()]
+    expected_tools = [DocsTool(), McpTool(), JiraTool(), BrowserTool(), GitHubTool(), YouTrackTool(), ZephyrTool(), PractiTestTool(), RedmineTool(), SqlTool(), AzureDevOpsTool()]
     if env.web_tool_tavily_api_key or (env.web_tool_google_api_key and env.web_tool_google_custom_search_engine_id):
         expected_tools.append(WebTool())
     expected_tools.sort(key=lambda t: t.name.casefold())

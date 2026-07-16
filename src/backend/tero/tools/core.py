@@ -96,7 +96,7 @@ class StatusUpdateCallbackHandler(AsyncCallbackHandler):
             AgentActionEvent(
                 action=AgentAction.TOOL_ERROR,
                 tool_name=self.tool_id,
-                result=[str(error)],
+                result=[str(error)[:200] + "..."],
             )
         )
 

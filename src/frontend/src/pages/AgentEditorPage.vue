@@ -249,8 +249,8 @@ onBeforeRouteUpdate(async (to) => {
         @compare-result-with-test-spec-state-changed="isComparingResultWithTestSpec = $event" />
     </template>
   </PageLayout>
-  <ToolAuthModal 
-    v-model:visible="showToolAuthModal" 
+  <ToolAuthModal
+    v-model:visible="showToolAuthModal"
     :tool-id="toolId"
     :auth-type="toolAuthType"
     @submit="submitAuth"

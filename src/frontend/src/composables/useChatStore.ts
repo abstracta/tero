@@ -1,11 +1,19 @@
 import { reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ApiService, Agent, Thread } from '@/services/api'
+import type { ChatUiMessage } from '@tero/common/components/chat/ChatMessage.vue'
+
+export interface ThreadUiState {
+  messages: ChatUiMessage[]
+  showMessageIndexes: Record<number, number>
+  streamingResponse: boolean
+}
 
 const maxChats = 20;
 const chatsStore = reactive({
   chats: [] as Thread[],
   currentChat: null as Thread | null,
+  threadUiStates: {} as Record<number, ThreadUiState>,
   setChats(chats: Thread[]) {
     this.chats = chats
   },
@@ -27,7 +35,8 @@ const chatsStore = reactive({
   },
   updateChat(chat: Thread) {
     const index = this.chats.findIndex((c) => c.id === chat.id)
-    this.chats.splice(index, 1, chat);
+    if (index === -1) return
+    this.chats.splice(index, 1, chat)
   }
 })
 
@@ -47,6 +56,7 @@ export function useChatStore() {
 
   async function deleteChat(threadId: number) {
     await api.deleteThread(threadId)
+    delete chatsStore.threadUiStates[threadId]
     // we just reload entire list in case there are more chats to show and we aren't due to current limit
     await loadChats()
     if (router.currentRoute.value.path.startsWith(`/chat/${threadId}`)) {
@@ -72,5 +82,13 @@ export function useChatStore() {
     chatsStore.currentChat = chat
   }
 
-  return { chatsStore, loadChats, newChat, deleteChat, openChat, updateChat, setCurrentChat }
+  function refreshChat(thread: Thread, moveChatToTop = true) {
+    if (chatsStore.currentChat?.id === thread.id) {
+      chatsStore.currentChat = thread
+    }
+    if (moveChatToTop) chatsStore.moveChatToTop(thread)
+    else chatsStore.updateChat(thread)
+  }
+
+  return { chatsStore, loadChats, newChat, deleteChat, openChat, updateChat, refreshChat, setCurrentChat }
 }

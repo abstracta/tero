@@ -54,9 +54,16 @@ DOCS_TOOL_ID = "docs"
 ADVANCED_FILE_PROCESSING = "advancedFileProcessing"
 
 
+def _count_tokens(text: str) -> int:
+    embedding_model = env.embedding_model
+    ai_provider = ai_factory.get_provider(embedding_model)
+    return ai_provider.count_tokens(text, embedding_model)
+
+
 class DocumentUrlSolvingRetriever(VectorStoreRetriever):
     agent_id: int
     tool_id: str
+    embedding_usage: Usage
 
     async def _aget_relevant_documents(
         self,
@@ -65,6 +72,7 @@ class DocumentUrlSolvingRetriever(VectorStoreRetriever):
         run_manager: AsyncCallbackManagerForRetrieverRun,
         **kwargs: Any,
     ) -> list[Document]:
+        self.embedding_usage.increment(_count_tokens(query), env.embedding_cost_per_1k_tokens)
         ret = await super()._aget_relevant_documents(
             query, run_manager=run_manager, **kwargs
         )
@@ -129,9 +137,8 @@ class DocsTool(AgentToolWithFiles):
 
     def _build_vectorstore(self):
         ai_provider = ai_factory.get_provider(env.embedding_model)
-        usage_tracker = lambda tokens: self.embedding_usage.increment(tokens, env.embedding_cost_per_1k_tokens)
         return PGVector(
-            embeddings=ai_provider.build_embedding(env.embedding_model, usage_tracker),
+            embeddings=ai_provider.build_embedding(env.embedding_model),
             connection=self._get_async_engine(),
             collection_name=self._build_collection_name(self.agent.id),
             use_jsonb=True
@@ -154,8 +161,10 @@ class DocsTool(AgentToolWithFiles):
             file.processed_content = file_doc.page_content
             await FileRepository(self.db).update(file)
             await self._update_tool_description_with_file(file, model, message_usage)
+            docs = self._split_file_content(file_doc)
+            self.embedding_usage.increment(sum(_count_tokens(doc.page_content) for doc in docs), env.embedding_cost_per_1k_tokens)
             await aindex(
-                self._split_file_content(file_doc),
+                docs,
                 self._build_record_manager(),
                 self._build_vectorstore(),
                 cleanup="incremental",
@@ -174,9 +183,8 @@ class DocsTool(AgentToolWithFiles):
         await self._update_tool_description(model, message_usage)
 
     def _split_file_content(self, file_doc: Document) -> list[Document]:
-        ai_provider = ai_factory.get_provider(env.embedding_model)
         text_splitter = MarkdownTextSplitter(
-            length_function=lambda text: ai_provider.count_tokens(text, env.embedding_model),
+            length_function=_count_tokens,
             chunk_size=env.docs_tool_chunk_size,
             chunk_overlap=env.docs_tool_chunk_overlap)
         return text_splitter.split_documents([file_doc])
@@ -194,8 +202,7 @@ class DocsTool(AgentToolWithFiles):
         return Document(page_content=content, metadata=metadata)
 
     async def _generate_file_description(self, file: File, model: LlmModel, message_usage: MessageUsage) -> str:
-        llm = ai_factory.build_chat_model(
-            model.id, env.internal_generator_temperature, env.internal_generator_reasoning_effort)
+        llm = ai_factory.build_internal_generator_chat_model(model)
         async with aiofiles.open(solve_asset_path('file-description-prompt.md', __file__)) as f:
             system_prompt = await f.read()
         text_splitter = RecursiveCharacterTextSplitter(
@@ -235,8 +242,7 @@ class DocsTool(AgentToolWithFiles):
             prompt = await f.read()
         for f in files:
             prompt += f"\n- {f.description}"
-        llm = ai_factory.build_chat_model(
-            model.id, env.internal_generator_temperature, env.internal_generator_reasoning_effort)
+        llm = ai_factory.build_internal_generator_chat_model(model)
         return await self._generate_description(prompt, 200, llm, model, message_usage)
 
     async def update_file(self, file: File, user: User):
@@ -314,7 +320,8 @@ class DocsTool(AgentToolWithFiles):
             vectorstore=self._build_vectorstore(),
             search_kwargs={"k": env.docs_tool_retrieve_top},
             agent_id=self.agent.id,
-            tool_id=self.id
+            tool_id=self.id,
+            embedding_usage=self.embedding_usage,
         )
 
     @staticmethod

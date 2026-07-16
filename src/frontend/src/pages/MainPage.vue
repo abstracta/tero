@@ -14,8 +14,8 @@ const { showToolAuthModal, toolAuthType, toolId, submitAuth, closeAuth } = useTo
       <router-view />
     </template>
   </PageLayout>
-  <ToolAuthModal 
-    v-model:visible="showToolAuthModal" 
+  <ToolAuthModal
+    v-model:visible="showToolAuthModal"
     :tool-id="toolId"
     :auth-type="toolAuthType"
     @submit="submitAuth"

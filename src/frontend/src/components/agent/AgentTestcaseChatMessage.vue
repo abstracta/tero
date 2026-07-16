@@ -79,22 +79,27 @@ const handleDeleteMessage = () => {
 
 <template>
     <div class="p-2 py-3 formatted-text w-full" @click="selectable ? emit('select', message) : null">
-        <div class="flex flex-col gap-2" :class="{'items-end justify-end': message.isUser, 'items-start justify-start': !message.isUser}">
-            <div class="flex gap-4 rounded-xl border-1 border-transparent" :class="{
-                'justify-self-end overflow-hidden bg-surface-muted  max-w-3/4': message.isUser,
-                'p-4': message.isPlaceholder || message.isUser,
-                'cursor-pointer': selectable,
-                'gap-2 max-w-full': !message.isUser,
-                '!border-primary border-pulse-primary': message.isUser && isSelected,
-                'p-4 !border-info border-pulse-info': !message.isUser && isSelected,
-                '!border-content-muted': message.isPlaceholder && !message.isUser,
-                'border-dashed': message.isPlaceholder
-            }">
-                <div class="overflow-x-auto">
-                    <div class="break-words" :class="{'text-content': !message.isPlaceholder, 'text-content-muted': message.isPlaceholder}"
-                        ref="messageElement"
-                        v-html="message.isUser ? (message.text ? escapeHtml(message.text).replace(/\n/g, '<br/>') : '') : renderedMessage"></div>
+        <div class="flex flex-col gap-2 max-w-full" :class="message.isUser ? 'items-end justify-end' : ''">
+            <div v-if="message.isUser || message.isPlaceholder"
+                class="flex gap-4 rounded-xl border-1 border-transparent"
+                :class="{
+                    'justify-self-end overflow-hidden bg-surface-muted max-w-3/4 p-4': message.isUser,
+                    'p-4 w-full': !message.isUser,
+                    'cursor-pointer': selectable,
+                    '!border-primary border-pulse-primary': message.isUser && isSelected,
+                    'p-4 !border-info border-pulse-info': !message.isUser && isSelected,
+                    '!border-content-muted border-dashed': message.isPlaceholder && !message.isUser,
+                }">
+                <div class="overflow-x-auto w-full">
+                    <div class="break-words"
+                        :class="message.isPlaceholder ? 'text-content-muted' : 'text-content'"
+                        v-html="message.text ? escapeHtml(message.text).replace(/\n/g, '<br/>') : ''"></div>
                 </div>
+            </div>
+            <div v-else-if="message.text" class="flex gap-4 min-w-[0] w-full">
+                <div ref="messageElement"
+                    class="flex flex-col w-full leading-tight gap-2 overflow-x-auto text-content"
+                    v-html="renderedMessage"></div>
             </div>
             <div class="flex gap-2" :class="!actionsEnabled ? 'invisible' : ''">
                 <SimpleIcon interactive v-tooltip.bottom="t('editMessageButton')" @click="$emit('select', message)"
@@ -122,11 +127,17 @@ const handleDeleteMessage = () => {
 {
     "en": {
         "editMessageButton": "Edit message",
-        "deleteMessageButton": "Delete message"
+        "deleteMessageButton": "Delete message",
+        "copyCodeButton": "Copy",
+        "copiedMessage": "Copied!",
+        "downloadCodeButton": "Download"
     },
     "es": {
         "editMessageButton": "Editar mensaje",
-        "deleteMessageButton": "Eliminar mensaje"
+        "deleteMessageButton": "Eliminar mensaje",
+        "copyCodeButton": "Copiar",
+        "copiedMessage": "Copiado!",
+        "downloadCodeButton": "Descargar"
     }
 }
 </i18n>

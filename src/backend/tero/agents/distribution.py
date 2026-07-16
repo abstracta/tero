@@ -27,7 +27,7 @@ from ..tools.core import AgentTool
 from ..tools.auth import ToolAuthRequestException
 from ..tools.repos import ToolRepository
 from ..users.domain import User
-from .domain import Agent, AgentUpdate, AgentToolConfig, LlmTemperature, ReasoningEffort
+from .domain import Agent, AgentUpdate, AgentToolConfig, AgentType, LlmTemperature, ReasoningEffort
 from .evaluators.domain import Evaluator
 from .evaluators.repos import EvaluatorRepository
 from .prompts.domain import AgentPrompt
@@ -100,6 +100,7 @@ async def _generate_agent_markdown(agent: Agent, tools: List[ToolInfo], user_id:
         icon=agent.icon,
         model_name=agent.model.name,
         model_config=_format_model_config(agent.temperature, agent.reasoning_effort, agent.model.model_type),
+        advanced_config=_format_advanced_config(agent),
         conversation_starters=[_format_prompt(p) for p in prompts if p.starter],
         user_prompts=[_format_prompt(p) for p in prompts if not p.starter],
         tools=[_format_tool(tool) for tool in tools],
@@ -115,6 +116,17 @@ def _build_jinja_env() -> Environment:
 def _format_model_config(temperature: LlmTemperature, reasoning_effort: ReasoningEffort, model_type: LlmModelType) -> dict:
     return {"Temperature": temperature.value.capitalize()} if model_type == LlmModelType.CHAT \
         else {"Reasoning": reasoning_effort.value.capitalize()}
+
+
+def _format_advanced_config(agent: Agent) -> dict:
+    config = {}
+    if agent.agent_type == AgentType.DEEP_AGENT:
+        config["Agent mode"] = "Advanced"
+    if agent.is_protected:
+        config["Protected configuration"] = "Yes"
+    if agent.recursion_limit != 20:
+        config["Thought process steps limit"] = str(agent.recursion_limit)
+    return config
 
 
 def _format_prompt(prompt: AgentPrompt) -> dict:
@@ -190,7 +202,7 @@ async def update_agent_from_zip(agent: Agent, zip_content: bytes, user: User, db
 
             parsed_tools = parsed.get('tools', [])
             tools, unavailable_tools = await _find_tools(parsed_tools)
-            unavailable_model, default_model = await _update_agent(agent, parsed, zip_file, root_folder, db)
+            unavailable_model, default_model = await _update_agent(agent, parsed, zip_file, root_folder, user, db)
             await _update_prompts(agent.id, parsed.get('conversation_starters', []), parsed.get('user_prompts', []), user.id, db)
             auth_required_tools = await _update_tools(agent, parsed_tools, tools, zip_file, root_folder, user, db, background_tasks)
             await _update_tests(agent.id, parsed.get('tests', []), user.id, db)
@@ -235,7 +247,7 @@ def _parse_tool_id(tool: Dict[str, Any]) -> str:
     return tool['name'].lower().replace(' ', '-')
 
 
-async def _update_agent(agent: Agent, parsed: Dict[str, Any], zip_file: ZipFile, root_folder: str, db: AsyncSession) -> tuple[Optional[str], Optional[str]]:
+async def _update_agent(agent: Agent, parsed: Dict[str, Any], zip_file: ZipFile, root_folder: str, user: User, db: AsyncSession) -> tuple[Optional[str], Optional[str]]:
     update = AgentUpdate()
     update.name = parsed['name']
     update.description = parsed['description']
@@ -261,9 +273,27 @@ async def _update_agent(agent: Agent, parsed: Dict[str, Any], zip_file: ZipFile,
     if parsed.get('evaluator'):
         agent.evaluator_id = await _create_new_evaluator(parsed['evaluator'], db)
 
+    _apply_imported_advanced_config(update, parsed.get("advanced_config", {}), user)
+
     agent.update_with(update)
     agent = await AgentRepository(db).update(agent)
     return unavailable_model, default_model
+
+
+def _apply_imported_advanced_config(update: AgentUpdate, advanced_config: Dict[str, Any], user: User) -> None:
+    update.recursion_limit = 20
+    if limit_str := advanced_config.get("Thought process steps limit"):
+        limit = int(str(limit_str).strip())
+        if 20 <= limit <= 100:
+            update.recursion_limit = limit
+
+    update.agent_type = AgentType.REACT_AGENT
+    if advanced_config.get("Agent mode", "").strip().lower() == "advanced":
+        update.agent_type = AgentType.DEEP_AGENT
+
+    update.is_protected = False
+    if user.is_global_owner() and advanced_config.get("Protected configuration", "").strip().lower() == "yes":
+        update.is_protected = True
 
 
 async def _create_new_evaluator(evaluator_dict: Dict[str, Any], db: AsyncSession) -> int:

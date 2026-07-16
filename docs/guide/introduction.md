@@ -1,6 +1,6 @@
 # Introduction
 
-![Tero in action](/screenshot.png)
+![Tero in action](./img/discover.png)
 
 Tero is an open-source platform to create, share, and use AI agents that accelerate and improve software quality practices across your team. It is collaborative by design, secure by default, and extensible so you can adapt it to your workflows and tools.
 

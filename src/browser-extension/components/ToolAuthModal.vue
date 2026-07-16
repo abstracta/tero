@@ -1,11 +1,10 @@
 <script lang="ts" setup>
-import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ToolAuthType } from '@tero/common/utils/toolAuth.js'
 
 const visible = defineModel<boolean>("visible")
 
-const props = defineProps<{ 
+const props = defineProps<{
   toolId: string
   authType: ToolAuthType
 }>()

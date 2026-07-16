@@ -30,6 +30,7 @@ dependencies = [
     "langchain-mcp-adapters (>=0.1.1,<0.2.0)",
     "cryptography (>=46.0.3,<47.0.0)",
     "azure-ai-documentintelligence (>=1.0.2,<2.0.0)",
+    "pyodbc (>=5.0.0,<6.0.0)",
     "tabulate (>=0.9.0,<0.10.0)",
     "openpyxl (>=3.1.5,<4.0.0)",
     "pypdf (>=6.3.0,<7.0.0)",
@@ -39,7 +40,7 @@ dependencies = [
     "beautifulsoup4 (>=4.13.4,<5.0.0)",
     "langchain-aws (>=1.0.0,<2.0.0)",
     "boto3 (>=1.39.4,<2.0.0)",
-    "langchain-google-genai (>=3.1.0,<4.0.0)",
+    "langchain-google-genai (>=4.2.1,<5.0.0)",
     "fastapi-mcp (>=0.4.0,<1.0.0)",
     "tokenizers (>=0.21.0,<1.0.0)",
     "python-keycloak (>=5.8.1,<6.0.0)",
@@ -51,7 +52,10 @@ dependencies = [
     "transformers (>=4.57.1,<5.0.0)",
     "python-slugify (>=8.0.4,<9.0.0)",
     "mcp (>=1.22.0,<1.26.0)",
-    "pypdfium2 (>=5.0.0,<6.0.0)"
+    "pypdfium2 (>=5.0.0,<6.0.0)",
+    "deepagents (>=0.5.3,<0.6.0)",
+    "langgraph-checkpoint-postgres (>=3.0.5,<4.0.0)",
+    "bcrypt (>=5.0.0,<6.0.0)"
 ]
 
 

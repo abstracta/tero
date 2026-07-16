@@ -25,5 +25,6 @@ if [[ -n "$OPENID_URL" ]]; then
   /usr/src/app/wait-for-it.sh -t 60 "${SERVER}"
 fi
 
+[ -n "$PRELOADED_TOKENIZER_MODELS" ] && export HF_HUB_OFFLINE=1
 
 exec "$@"

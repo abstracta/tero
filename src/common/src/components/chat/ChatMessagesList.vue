@@ -30,7 +30,7 @@ const emit = defineEmits<{
       :isEditingAgent="isEditingAgent"
       :isFeedbackLoading="feedbackLoadingMessageId === message.id"
       @prompt-create="emit('promptCreate', $event)"
-      @edit-message="(text: string, files: UploadedFile[]) => emit('editMessage', message.id!, text, files)"
+      @edit-message="(text: string, files: UploadedFile[]) => emit('editMessage', message.isUser ? message.id! : message.parent!.id!, text, files)"
       @select-message-branch="(index:number) => emit('selectMessageBranch', depth, index)"
       @feedback-change="(feedback?: UserFeedback) => emit('feedbackChange', message.id!, feedback)"
       @view-file="emit('viewFile', $event)"/>

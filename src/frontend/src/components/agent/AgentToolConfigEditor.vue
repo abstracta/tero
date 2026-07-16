@@ -33,7 +33,7 @@ import { ref, computed, onMounted, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ApiService, findManifest, HttpError } from '@/services/api'
 import CopyButton from '@tero/common/components/common/CopyButton.vue'
-import { buildToolConfigName } from '@tero/common/utils/toolConfig.js'
+import { buildToolConfigName, toolTranslationKey } from '@tero/common/utils/toolConfig.js'
 
 const props = defineProps<{
   toolConfig: EditingToolConfig
@@ -149,7 +149,7 @@ const solveToolPropertyHelperText = (toolId: string, propName: string): string |
 }
 
 const buildToolPropertyTranslationKey = (toolId: string, propName: string) : string => {
-  return toolId.split('-', 1)[0] + propName.charAt(0).toUpperCase() + propName.slice(1)
+  return toolTranslationKey(toolId) + propName.charAt(0).toUpperCase() + propName.slice(1)
 }
 
 const solveToolPropertyTooltip = (toolId: string, propName: string, value: unknown) : string | null => {
@@ -176,7 +176,10 @@ const toolMessage = computed(() => {
 const isBrowserTool = computed(() => props.toolConfig.tool.id.startsWith('browser'))
 const isWebTool = computed(() => props.toolConfig.tool.id.startsWith('web'))
 const isEnableOnlyTool = computed(() => isBrowserTool.value || isWebTool.value)
-const isJiraTool = computed(() => props.toolConfig.tool.id.startsWith('jira'))
+const showsOAuthRedirect = computed(() =>
+  (props.toolConfig.tool.configSchema as Record<string, unknown>)['x-oauth-redirect'] === true
+)
+const oauthCallbackUrl = computed(() => `${window.location.origin}/tools/${props.toolConfig.tool.id}/oauth-callback`)
 
 const toolAlertMessage = computed(() => {
   const toolAlertMessageKey = buildToolPropertyTranslationKey(props.toolConfig.tool.id, 'toolAlertMessage')
@@ -184,14 +187,11 @@ const toolAlertMessage = computed(() => {
   return ret != toolAlertMessageKey ? ret : null
 })
 
-const jiraToolAlertGuideMessage = computed(() => {
+const toolAlertGuideMessage = computed(() => {
   const toolAlertGuideKey = buildToolPropertyTranslationKey(props.toolConfig.tool.id, 'toolAlertGuideMessage')
   const ret = t(toolAlertGuideKey)
   return ret != toolAlertGuideKey ? ret : null
 })
-
-const jiraCallbackUrl = computed(() => `${window.location.origin}/tools/jira/oauth-callback`)
-
 
 const hasFileProperties = computed(() =>
   Object.values(toolProperties.value).some(prop => isFileProperty(prop) || isFileArrayProperty(prop))
@@ -367,6 +367,7 @@ const saveToolConfig = async () => {
 
 const validateToolConfig = () => {
   const ajv = new Ajv()
+  ajv.addVocabulary(['x-oauth-redirect'])
   addFormats(ajv)
   const toolConfig = props.toolConfig
   const schema = ajv.compile(removeFileProperties(toolConfig.tool.configSchema))
@@ -413,7 +414,7 @@ class ValidationErrors extends Error {
 </script>
 
 <template>
-  <FlexCard header-class="flex items-center justify-between px-4 -mx-6 " class="border-0! dark:border! px-6! pb-6!">
+  <FlexCard header-class="flex items-center justify-between px-4 -mx-6 " class="border-0! dark:border! px-6!" :class="{ 'pb-6!': viewMode }">
     <template #header>
       <div class="flex w-full items-center justify-between">
         <div class="flex gap-2 items-center">
@@ -432,13 +433,13 @@ class ValidationErrors extends Error {
           <IconInfoCircleFilled size="24" class="text-content" />
           <div class="flex flex-col">
             <span v-html="toolAlertMessage" class="inline pt-0.5"></span>
-            <div v-if="isJiraTool" class="mt-1 flex items-center gap-1">
-              {{ jiraCallbackUrl }}
-              <CopyButton :text="jiraCallbackUrl" @error="handleError" />
+            <div v-if="showsOAuthRedirect" class="mt-1 flex items-center gap-1">
+              {{ oauthCallbackUrl }}
+              <CopyButton :text="oauthCallbackUrl" @error="handleError" />
             </div>
             <span
-              v-if="isJiraTool && jiraToolAlertGuideMessage"
-              v-html="jiraToolAlertGuideMessage"
+              v-if="showsOAuthRedirect && toolAlertGuideMessage"
+              v-html="toolAlertGuideMessage"
               class="inline">
             </span>
           </div>
@@ -601,6 +602,15 @@ class ValidationErrors extends Error {
       "youtrackToken": "Permanent token",
       "youtrackTokenPlaceholder": "Paste your YouTrack permanent token",
       "youtrackTokenHelperText": "Create one in YouTrack account settings. {'<'}a class='inline! font-normal! underline!' href='https://www.jetbrains.com/help/youtrack/cloud/manage-permanent-token.html' target='_blank'>See guide{'<'}/a>.",
+      "zephyrToolMessage": "Manage test cases, plans, cycles, and executions.",
+      "zephyrToolAlertMessage": "Attachments are not supported due to Zephyr API limitations.",
+      "zephyrProduct": "Product",
+      "zephyrProductHelperText": "Choose the Zephyr product that matches your Jira instance. The access token must be generated for that product.",
+      "zephyrProductCloud": "Zephyr Cloud",
+      "zephyrProductEssential": "Zephyr Essential Cloud",
+      "zephyrAccessToken": "Access token",
+      "zephyrAccessTokenPlaceholder": "Paste your Zephyr API access token",
+      "zephyrAccessTokenHelperText": "Create one in your Jira/Zephyr account settings. {'<'}a class='inline! font-normal! underline!' href='https://support.smartbear.com/zephyr/docs/en/rest-api/api-access-tokens-management.html' target='_blank'>See guide{'<'}/a> (Zephyr Cloud), {'<'}a class='inline! font-normal! underline!' href='https://smartbear.portal.swaggerhub.com/zephyr-squad/default/authentication#generate-a-key' target='_blank'>see guide{'<'}/a> (Essential Cloud).",
       "practitestToolMessage": "Manage tests, test sets and requirements.",
       "practitestToolAlertMessage": "To use this tool, provide your PractiTest MCP server URL.{'<'}br/>{'<'}br/>{'<'}span class='font-semibold'>US:{'<'}/span> https://api.practitest.com/mcp/v1/server{'<'}br/>{'<'}span class='font-semibold'>EU:{'<'}/span> https://eu1-prod-api.practitest.app/mcp/v1/server{'<'}br/>{'<'}br/>Check the {'<'}a class='inline! font-normal! underline!' href='https://www.practitest.com/help/integrations/mcp/' target='_blank'>API documentation{'<'}/a>.",
       "practitestServerUrl": "Server URL",
@@ -617,6 +627,23 @@ class ValidationErrors extends Error {
       "jiraScopeRead:jira-work": "Read",
       "jiraScopeWrite:jira-work": "Write",
       "jiraScopeRead:jira-user": "User Info",
+      "azureDevopsToolMessage": "Read user stories, manage test plan cases, and link tests to stories.",
+      "azureDevopsToolAlertMessage": "Register a Microsoft Entra app for Azure DevOps and use the redirect URL below:",
+      "azureDevopsToolAlertGuideMessage": "{'<'}br/>Read the {'<'}a class='inline! font-normal! underline!' href='https://learn.microsoft.com/en-us/azure/devops/integrate/get-started/authentication/entra-oauth?view=azure-devops' target='_blank'>Entra OAuth setup guide{'<'}/a>.",
+      "azureDevopsTenantId": "Tenant ID",
+      "azureDevopsTenantIdPlaceholder": "Tenant GUID",
+      "azureDevopsClientId": "Client ID",
+      "azureDevopsClientIdPlaceholder": "Paste your Entra application client ID",
+      "azureDevopsClientSecret": "Client secret",
+      "azureDevopsClientSecretPlaceholder": "Paste your Entra application client secret",
+      "azureDevopsScope": "Scopes",
+      "azureDevopsScopeHelperText": "Grant the same delegated Azure DevOps permissions in the Entra app registration.",
+      "azureDevopsScopeProfile": "Profile (read)",
+      "azureDevopsScopeProject": "Projects and teams (read)",
+      "azureDevopsScopeWork": "Work items (read)",
+      "azureDevopsScopeWork_write": "Work items (write)",
+      "azureDevopsScopeTest": "Test plans (read)",
+      "azureDevopsScopeTest_write": "Test plans (write)",
       "redmineUrl": "Redmine URL",
       "redmineUrlPlaceholder": "https://redmine.example.com",
       "redmineApiKey": "API key",
@@ -624,6 +651,21 @@ class ValidationErrors extends Error {
       "redmineApiKeyHelperText": "Found in Redmine account Settings. {'<'}a class='inline! font-normal! underline!' href='https://www.redmine.org/projects/redmine/wiki/rest_api#Authentication' target='_blank'>See guide{'<'}/a>.",
       "webToolMessage": "Search the web and extract content from any URL.",
       "browserToolMessage": "Interact with web sites and capture screenshots.{'<'}br/>{'<'}br/>Check the {'<'}a class='inline! font-normal! underline!' href='https://hub.docker.com/r/mcp/playwright#available-tools-21' target='_blank'>documentation{'<'}/a> to see supported actions.",
+      "sqlToolMessage": "Get and modify information on a database.",
+      "sqlToolAlertMessage": "Since this tool can modify existing data, it is recommended to use a database user with only read permissions.",
+      "sqlDbType": "Database type",
+      "sqlDbTypeAzure": "Azure SQL Server",
+      "sqlServer": "Server",
+      "sqlServerPlaceholder": "myserver.database.windows.net",
+      "sqlAzureTenantId": "Tenant ID",
+      "sqlAzureTenantIdPlaceholder": "Paste your Tenant ID",
+      "sqlAzureTenantIdHelperText": "Found in Azure Portal under Microsoft Entra ID → Overview.",
+      "sqlAzureClientId": "Client ID",
+      "sqlAzureClientIdPlaceholder": "Paste your Client ID",
+      "sqlAzureClientIdHelperText": "Application (client) ID of your Azure AD app registration.",
+      "sqlAzureClientSecret": "Client Secret",
+      "sqlAzureClientSecretPlaceholder": "Paste your Client Secret",
+      "sqlAzureClientSecretHelperText": "Client secret of your Azure AD app registration.",
       "advancedOptions": "Advanced options",
       "savingChanges": "Saving changes...",
       "errorSavingChanges": "Save failed",
@@ -681,6 +723,15 @@ class ValidationErrors extends Error {
       "youtrackToken": "Token permanente",
       "youtrackTokenPlaceholder": "Pega tu token permanente de YouTrack",
       "youtrackTokenHelperText": "Puedes crearlo en la configuración de tu cuenta de YouTrack. {'<'}a class='inline! font-normal! underline!' href='https://www.jetbrains.com/help/youtrack/cloud/manage-permanent-token.html' target='_blank'>Ver guía{'<'}/a>.",
+      "zephyrToolMessage": "Gestiona casos de prueba, planes, ciclos y ejecuciones.",
+      "zephyrToolAlertMessage": "Los archivos adjuntos no son soportados debido a limitaciones de la API de Zephyr.",
+      "zephyrProduct": "Producto",
+      "zephyrProductHelperText": "Elige el producto Zephyr de tu instancia de Jira. El token de acceso debe generarse para ese producto.",
+      "zephyrProductCloud": "Zephyr Cloud",
+      "zephyrProductEssential": "Zephyr Essential Cloud",
+      "zephyrAccessToken": "Token de acceso",
+      "zephyrAccessTokenPlaceholder": "Pega tu token de acceso de la API Zephyr",
+      "zephyrAccessTokenHelperText": "Créalo en la configuración de tu cuenta de Jira/Zephyr. {'<'}a class='inline! font-normal! underline!' href='https://support.smartbear.com/zephyr/docs/en/rest-api/api-access-tokens-management.html' target='_blank'>Ver guía{'<'}/a> (Zephyr Cloud), {'<'}a class='inline! font-normal! underline!' href='https://smartbear.portal.swaggerhub.com/zephyr-squad/default/authentication#generate-a-key' target='_blank'>ver guía{'<'}/a> (Essential Cloud).",
       "practitestToolMessage": "Gestiona tests, conjuntos de tests y requisitos.",
       "practitestToolAlertMessage": "Para usar esta herramienta, proporciona la URL del servidor MCP de PractiTest.{'<'}br/>{'<'}br/>{'<'}span class='font-semibold'>US:{'<'}/span> https://api.practitest.com/mcp/v1/server{'<'}br/>{'<'}span class='font-semibold'>EU:{'<'}/span> https://eu1-prod-api.practitest.app/mcp/v1/server{'<'}br/>{'<'}br/>Consulta la {'<'}a class='inline! font-normal! underline!' href='https://www.practitest.com/help/integrations/mcp/' target='_blank'>documentación de la API{'<'}/a>.",
       "practitestServerUrl": "URL del servidor",
@@ -697,6 +748,23 @@ class ValidationErrors extends Error {
       "jiraScopeRead:jira-work": "Leer",
       "jiraScopeWrite:jira-work": "Escribir",
       "jiraScopeRead:jira-user": "Info. del usuario",
+      "azureDevopsToolMessage": "Lee user stories, gestiona casos del test plan y vincula tests con stories.",
+      "azureDevopsToolAlertMessage": "Registra una app de Microsoft Entra para Azure DevOps y usa la URL de redirección de abajo:",
+      "azureDevopsToolAlertGuideMessage": "{'<'}br/>Revisa la {'<'}a class='inline! font-normal! underline!' href='https://learn.microsoft.com/en-us/azure/devops/integrate/get-started/authentication/entra-oauth?view=azure-devops' target='_blank'>guía de Entra OAuth{'<'}/a>.",
+      "azureDevopsTenantId": "Tenant ID",
+      "azureDevopsTenantIdPlaceholder": "GUID del tenant",
+      "azureDevopsClientId": "Client ID",
+      "azureDevopsClientIdPlaceholder": "Pega el client ID de la app Entra",
+      "azureDevopsClientSecret": "Secreto del cliente",
+      "azureDevopsClientSecretPlaceholder": "Pega el client secret de la app Entra",
+      "azureDevopsScope": "Scopes",
+      "azureDevopsScopeHelperText": "Otorga los mismos permisos delegados de Azure DevOps en el registro de la app Entra.",
+      "azureDevopsScopeProfile": "Perfil (lectura)",
+      "azureDevopsScopeProject": "Proyectos y equipos (lectura)",
+      "azureDevopsScopeWork": "Work items (lectura)",
+      "azureDevopsScopeWork_write": "Work items (escritura)",
+      "azureDevopsScopeTest": "Test plans (lectura)",
+      "azureDevopsScopeTest_write": "Test plans (escritura)",
       "redmineUrl": "Redmine URL",
       "redmineUrlPlaceholder": "https://redmine.example.com",
       "redmineApiKey": "API key",
@@ -704,6 +772,21 @@ class ValidationErrors extends Error {
       "redmineApiKeyHelperText": "La encuentras en Mi cuenta de Redmine. {'<'}a class='inline! font-normal! underline!' href='https://www.redmine.org/projects/redmine/wiki/rest_api#Authentication' target='_blank'>Ver guía{'<'}/a>.",
       "webToolMessage": "Busca en la web y extrae contenido de cualquier URL.",
       "browserToolMessage": "Interactúa con sitios web y toma capturas de pantalla.{'<'}br/>{'<'}br/>Consulta la {'<'}a class='inline! font-normal! underline!' href='https://hub.docker.com/r/mcp/playwright#available-tools-21' target='_blank'>documentación{'<'}/a> para ver las acciones compatibles.",
+      "sqlToolMessage": "Obtiene y modifica información en una base de datos.",
+      "sqlToolAlertMessage": "Ya que esta herramienta puede modificar datos existentes, se recomienda usar un usuario de base de datos con permisos de solo lectura.",
+      "sqlDbType": "Tipo de base de datos",
+      "sqlDbTypeAzure": "Azure SQL Server",
+      "sqlServer": "Servidor",
+      "sqlServerPlaceholder": "myserver.database.windows.net",
+      "sqlAzureTenantId": "Tenant ID",
+      "sqlAzureTenantIdPlaceholder": "Pega tu Tenant ID",
+      "sqlAzureTenantIdHelperText": "Lo encuentras en Azure Portal bajo Microsoft Entra ID → Resumen.",
+      "sqlAzureClientId": "Client ID",
+      "sqlAzureClientIdPlaceholder": "Pega tu Client ID",
+      "sqlAzureClientIdHelperText": "ID de aplicación (cliente) de tu registro de app en Azure AD.",
+      "sqlAzureClientSecret": "Client Secret",
+      "sqlAzureClientSecretPlaceholder": "Pega tu Client Secret",
+      "sqlAzureClientSecretHelperText": "Client secret de tu registro de app en Azure AD.",
       "advancedOptions": "Opciones avanzadas",
       "savingChanges": "Guardando cambios...",
       "errorSavingChanges": "Guardar falló",

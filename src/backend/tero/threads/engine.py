@@ -1,12 +1,17 @@
 import asyncio
 import base64
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from contextlib import AsyncExitStack
-from datetime import datetime, timezone
 import json
-from typing import Callable, List, Any, cast, Optional
+from datetime import datetime, timezone
+from typing import List, Any, cast, Optional, Callable
 
-from langchain_core.language_models import BaseChatModel
+from deepagents import create_deep_agent
+from langchain.agents.middleware import AgentMiddleware
+from langchain.tools.tool_node import ToolCallRequest
+from deepagents.backends import StoreBackend
+from langgraph.prebuilt import create_react_agent
+from langgraph.prebuilt.tool_node import ToolNode
 from langchain_core.messages import (
     HumanMessage,
     AIMessage,
@@ -15,26 +20,29 @@ from langchain_core.messages import (
     BaseMessage,
 )
 from langchain_core.messages.utils import _is_message_type
-from langchain_core.tools import tool, BaseTool
+from langchain_core.language_models import BaseChatModel
+from langchain_core.tools import BaseTool, tool
 from langchain_core.utils.function_calling import convert_to_openai_tool
-from langgraph.prebuilt import create_react_agent
-from langgraph.prebuilt.tool_node import ToolNode
+from langgraph.store.base import BaseStore
+from langgraph.types import Command
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from ..agents.domain import Agent
+from ..agents.domain import Agent, AgentType
 from ..agents.repos import AgentToolConfigRepository
 from ..ai_models import ai_factory
 from ..ai_models.repos import AiModelRepository
 from ..core.env import env
 from ..threads.core import trim_messages_to_fit_model
+from ..tools.auth import ToolAuthRequestException
 from ..tools.core import AgentTool, AgentToolMetadata
 from ..tools.repos import ToolRepository
 from ..usage.domain import MessageUsage
 from .domain import ThreadMessage, ThreadMessageOrigin, MAX_THREAD_NAME_LENGTH, AgentEvent, AgentActionEvent, AgentFileEvent, AgentMessageEvent, AgentAction, ModelRateLimitError
 
+def agent_store_namespace(user_id: int, thread_id: int) -> tuple[str, ...]:
+    return (f"user_{user_id}", f"thread_{thread_id}", "fs")
 
-# adding this tool because we are going to add more tools in the future and right now
-# is easier to add a lame tool and make it work with it than without any tools
+
 @tool
 def clock() -> str:
     """Returns the current time in UTC."""
@@ -44,10 +52,11 @@ def clock() -> str:
 class AgentEngine:
     _MEMORY_INPUT_KEY = "input"
 
-    def __init__(self, agent: Agent, user_id: int, db: AsyncSession):
+    def __init__(self, agent: Agent, user_id: int, db: AsyncSession, store: BaseStore):
         self._agent = agent
         self._user_id = user_id
         self._db = db
+        self._store = store
 
     async def load_tools(self, stack: AsyncExitStack, thread_id: Optional[int] = None) -> List[AgentTool]:
         tool_configs = await AgentToolConfigRepository(self._db).find_by_agent_id(
@@ -65,18 +74,13 @@ class AgentEngine:
 
     async def answer(self, messages: List[ThreadMessage], message_usage: MessageUsage, stop_event: asyncio.Event) -> AsyncIterator[AgentEvent]:
         provider = ai_factory.get_provider(self._agent.model.id)
-        llm = provider.build_streaming_chat_model(self._agent.model.id, self._agent.model_temperature,  self._agent.model_reasoning_effort)
+        llm = provider.build_streaming_chat_model(self._agent.model.id, self._agent.model_temperature, self._agent.model_reasoning_effort)
         async with AsyncExitStack() as stack:
             agent_tools = await self.load_tools(stack, thread_id=messages[0].thread_id)
-            tools = [ lt for t in agent_tools for lt in await t.build_langchain_tools() ]
+            tools = [lt for t in agent_tools for lt in await t.build_langchain_tools()]
             tools.append(clock)
-            # Enable error handling so ToolException from MCP tools (execution errors)
-            # are shown to the LLM instead of crashing the agent
-            agent = create_react_agent(
-                llm, ToolNode(tools, handle_tool_errors=True), pre_model_hook=self._build_message_trimmer(llm, tools)
-            )
-
-            input = self._build_input(messages)
+            agent, input = self._build_runtime(llm, tools, messages)
+            await self._write_files_to_store(messages[-1])
             generated_content = ""
             stream = agent.astream(
                 input,
@@ -145,9 +149,9 @@ class AgentEngine:
     async def _process_updates(self, content: Any) -> AsyncIterator[AgentActionEvent]:
         if isinstance(content, dict):
             ((key, value), *_) = content.items()
-            if key == "pre_model_hook":
+            if key.endswith(".before_agent") or key == "pre_model_hook":
                 yield AgentActionEvent(action=AgentAction.PRE_MODEL_HOOK)
-            elif key == "agent":
+            elif key == "model" or key == "agent":
                 async for update in self._process_agent(value):
                     yield update
         else:
@@ -158,7 +162,7 @@ class AgentEngine:
             yield AgentActionEvent(action=AgentAction.UNDEFINED, result=json_content)
 
     async def _process_agent(self, value: Any) -> AsyncIterator[AgentActionEvent]:
-        if not value.get("messages"):
+        if not isinstance(value, dict) or not value.get("messages"):
             return
         message = value["messages"][0]
         finish_reason = message.response_metadata.get("finish_reason")
@@ -169,6 +173,30 @@ class AgentEngine:
                 for tool_calls in message.tool_calls:
                     result.append(tool_calls["name"])
                 yield AgentActionEvent(action=AgentAction.PLANNING, result=result)
+
+    def _build_runtime(self, llm: BaseChatModel, tools: List[BaseTool], messages: List[ThreadMessage]) -> tuple[Any, Any]:
+        if self._agent.agent_type == AgentType.REACT_AGENT:
+            agent = create_react_agent(
+                llm,
+                ToolNode(tools, handle_tool_errors=True),
+                pre_model_hook=self._build_message_trimmer(llm, tools)
+            )
+            input_data = self._build_input(messages, include_system_prompt=True)
+            return agent, input_data
+
+        backend = StoreBackend(
+            store=self._store,
+            namespace=lambda _: agent_store_namespace(self._user_id, messages[0].thread_id),
+        )
+        agent = create_deep_agent(
+            model=llm,
+            tools=tools,
+            system_prompt=self._agent.system_prompt,
+            backend=backend,
+            middleware=[_HandleToolErrorsMiddleware()],
+        )
+        input_data = self._build_input(messages, include_system_prompt=False)
+        return agent, input_data
 
     def _build_message_trimmer(
         self, llm: BaseChatModel, tools: List[BaseTool]
@@ -214,36 +242,54 @@ class AgentEngine:
         tools_json = json.dumps(openai_tools)
         return llm.get_num_tokens(tools_json)
 
-    def _build_input(self, messages: List[ThreadMessage]) -> Any:
-        messages_list: List[BaseMessage] = [SystemMessage(self._agent.system_prompt)]
+    async def _write_files_to_store(self, message: ThreadMessage) -> None:
+        if self._agent.agent_type != AgentType.DEEP_AGENT:
+            return
+        namespace = agent_store_namespace(self._user_id, message.thread_id)
+        for file_obj in message.files:
+            f = file_obj.file
+            if self._is_inline_image_file(f.name, f.content_type):
+                continue
+            if not self._store_as_text(f.name) or not f.processed_content:
+                continue
+            await self._store.aput(namespace, f"/{f.name}", {
+                "content": f.processed_content,
+                "encoding": "utf-8",
+            })
+    
+    # deepagents treats these extensions as multimodal binary "file" blocks, not text.
+    # Models that don't support the "file" content type (e.g. Azure OpenAI) will reject them.
+    # Keep these out of the store and send extracted text inline instead.
+    @staticmethod
+    def _store_as_text(file_name: str) -> bool:
+        return not file_name.lower().endswith(".pdf")
+
+    @staticmethod
+    def _is_inline_image_file(file_name: str, content_type: str) -> bool:
+        return content_type.startswith("image/") and not file_name.lower().endswith(".svg")
+
+    def _build_input(self, messages: List[ThreadMessage], include_system_prompt: bool) -> Any:
+        use_store_for_files = self._agent.agent_type == AgentType.DEEP_AGENT
+        messages_list: List[BaseMessage] = [SystemMessage(self._agent.system_prompt)] if include_system_prompt else []
         for message in messages:
             if message.origin == ThreadMessageOrigin.USER:
                 content = []
                 message_text = message.text
 
                 for file_obj in message.files:
-                    # svg files should be treated as text
-                    if file_obj.file.content_type.startswith("image/") and not file_obj.file.name.lower().endswith('.svg'):
+                    if self._is_inline_image_file(file_obj.file.name, file_obj.file.content_type):
                         content.append(
                             {
                                 "type": "image",
                                 "source_type": "base64",
                                 "mime_type": file_obj.file.content_type,
-                                "data": base64.b64encode(file_obj.file.content).decode(
-                                    "utf-8"
-                                ),
+                                "data": base64.b64encode(file_obj.file.content).decode("utf-8"),
                             }
                         )
-                    else:
-                        message_text = (
-                            message_text
-                            + "\n\n File named: "
-                            + file_obj.file.name
-                            + "\n\n"
-                            + file_obj.file.processed_content
-                            if file_obj.file.processed_content
-                            else ""
-                        )
+                    elif use_store_for_files and self._store_as_text(file_obj.file.name):
+                        message_text += f"\n\nAttached file: /{file_obj.file.name}"
+                    elif file_obj.file.processed_content:
+                        message_text += "\n\n File named: " + file_obj.file.name + "\n\n" + file_obj.file.processed_content
 
                 if message_text.strip():
                     content.append({"type": "text", "text": message_text})
@@ -254,12 +300,30 @@ class AgentEngine:
         return {"messages": messages_list}
 
 
+class _HandleToolErrorsMiddleware(AgentMiddleware):
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command]],
+    ) -> ToolMessage | Command:
+        try:
+            return await handler(request)
+        except ToolAuthRequestException:
+            raise
+        except Exception as e:
+            return ToolMessage(
+                content=f"Error: {e}",
+                name=request.tool_call["name"],
+                tool_call_id=request.tool_call["id"],
+                status="error",
+            )
+
+
 async def build_thread_name(first_thread_message: str, message_usage: MessageUsage, db: AsyncSession) -> str:
     model = await AiModelRepository(db).find_by_id(env.internal_generator_model)
     if not model:
         raise ValueError("Internal generator model not found")
-    llm = ai_factory.build_chat_model(
-        model.id, env.internal_generator_temperature, env.internal_generator_reasoning_effort)
+    llm = ai_factory.build_internal_generator_chat_model(model)
     system_prompt = "From the following user message generate a short (less than 80 characters) title for the chat. Do not include quoting or any special characters."
     # invoke the llm using the prompt as system prompt and the first thread message as user message
     response = await llm.ainvoke(

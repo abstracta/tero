@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ExternalAgent } from '@/services/api'
-import externalAgentIcon from '@/assets/images/icon-external-agent.svg'
+import { IconCubeSpark } from '@tabler/icons-vue'
 
 const { externalAgent } = defineProps<{
     externalAgent: ExternalAgent
@@ -12,7 +12,7 @@ const { externalAgent } = defineProps<{
 <template>
   <Avatar :class="`'bg-surface' ${bordered ? 'border-1' : ''}`" shape="circle" :size="size">
     <template #icon>
-      <img v-if="!externalAgent.icon" :src="externalAgentIcon" class="p-1" />
+      <IconCubeSpark v-if="!externalAgent.icon" />
       <img v-else :src="`data:image/png;base64,${externalAgent.icon}`" />
     </template>
   </Avatar>

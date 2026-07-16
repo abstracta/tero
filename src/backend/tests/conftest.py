@@ -10,6 +10,9 @@ import os
 from typing import Generator, AsyncGenerator, List
 from unittest.mock import AsyncMock, patch
 
+from langgraph.store.memory import InMemoryStore
+from langgraph.store.base import BaseStore
+
 from fastapi import Depends
 import freezegun
 from httpx import AsyncClient, ASGITransport
@@ -31,6 +34,7 @@ from tero.core.env import env
 from tero.core.repos import get_db
 from tero.teams.domain import Role, Team, TeamRole, TeamRoleStatus
 from tero.threads.domain import Thread, ThreadMessage
+from tero.threads.agents_store import get_store
 from tero.users.domain import User, UserListItem
 
 from .common import find_last_id, USER_ID, OTHER_USER_ID, AGENT_ID, NON_EDITABLE_AGENT_ID, GLOBAL_TEAM_ID, parse_date, find_asset_text
@@ -120,11 +124,19 @@ async def client_fixture(session: AsyncSession) -> AsyncGenerator[AsyncClient, N
             raise ValueError(f"User with ID {USER_ID} not found")
         return user
 
+    test_store = InMemoryStore()
+
+    def get_store_override() -> BaseStore:
+        return test_store
+
     app.dependency_overrides[get_db] = get_db_override
     app.dependency_overrides[auth.get_current_user] = get_current_user_override
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        yield client
-    app.dependency_overrides.clear()
+    app.dependency_overrides[get_store] = get_store_override
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            yield client
+    finally:
+        app.dependency_overrides.clear()
 
 
 @pytest.fixture(name="users")

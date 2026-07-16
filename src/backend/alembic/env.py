@@ -9,6 +9,7 @@ from sqlalchemy import pool
 
 # need to add following type ignore to avoid intellij removing imports when organizing them, and warnings in vscode
 from tero.agents.domain import *  # type: ignore
+from tero.api_keys.domain import *  # type: ignore
 from tero.agents.evaluators.domain import *  # type: ignore
 from tero.agents.prompts.domain import *  # type: ignore
 from tero.ai_models.domain import *  # type: ignore
@@ -35,7 +36,7 @@ db_url = env.db_url
 
 
 def ignore_langchain_tables(name, type_, parent_names):
-    return type_ != "table" or name not in ["upsertion_record", "langchain_pg_collection", "langchain_pg_embedding"]
+    return type_ != "table" or name not in ["upsertion_record", "langchain_pg_collection", "langchain_pg_embedding", "store", "store_migrations"]
 
 
 def render_item(type_: str, obj: Any, autogen_metadata: AutogenContext) -> Union[str, Literal[False]]:

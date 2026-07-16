@@ -6,6 +6,7 @@ from typing import List, cast, Any, AsyncIterator, Tuple, Optional, Dict, Corout
 
 from langchain_core.callbacks import AsyncCallbackHandler
 from langgraph.errors import GraphRecursionError
+from langgraph.store.base import BaseStore
 from langchain_core.messages.ai import UsageMetadata
 from langchain_core.outputs import LLMResult
 from langchain_core.prompts import ChatPromptTemplate
@@ -119,7 +120,7 @@ class BackgroundTestSuiteRunner:
             "evaluation": None
         })
 
-    async def _run_test_case_stream(self, db: AsyncSession, test_case: TestCase, agent: Agent, user_id: int, result: TestCaseResult, stop_event: asyncio.Event) -> AsyncIterator[Tuple[TestCaseEventType, Any]]:
+    async def _run_test_case_stream(self, db: AsyncSession, test_case: TestCase, agent: Agent, user_id: int, result: TestCaseResult, stop_event: asyncio.Event, store: BaseStore) -> AsyncIterator[Tuple[TestCaseEventType, Any]]:
         results_repo = TestCaseResultRepository(db)
         try:
             thread_message_repo = ThreadMessageRepository(db)
@@ -159,7 +160,7 @@ class BackgroundTestSuiteRunner:
                 actual_output = ""
 
                 async for event_type, content in self._execute_agent_with_input_stream(
-                    db, agent, user_input, user_id, execution_thread.id, execution_messages, stop_event
+                    db, agent, user_input, user_id, execution_thread.id, execution_messages, stop_event, store
                 ):
                     if event_type == TestCaseEventType.AGENT_MESSAGE_COMPLETE:
                         actual_output = content["text"]
@@ -232,7 +233,7 @@ class BackgroundTestSuiteRunner:
                 "evaluation": None
             })
 
-    async def _execute_agent_with_input_stream(self, db: AsyncSession, agent: Agent, user_input: str, user_id: int, thread_id: int, previous_messages: List[ThreadMessage], stop_event: asyncio.Event) -> AsyncIterator[Tuple[TestCaseEventType, Any]]:
+    async def _execute_agent_with_input_stream(self, db: AsyncSession, agent: Agent, user_input: str, user_id: int, thread_id: int, previous_messages: List[ThreadMessage], stop_event: asyncio.Event, store: BaseStore) -> AsyncIterator[Tuple[TestCaseEventType, Any]]:
         thread_message_repo = ThreadMessageRepository(db)
         input_message = await thread_message_repo.add(ThreadMessage(
             text=user_input,
@@ -247,7 +248,7 @@ class BackgroundTestSuiteRunner:
         })
 
         input_message_usage = MessageUsage(user_id=user_id, agent_id=agent.id, model_id=agent.model_id, message_id=input_message.id)
-        engine = AgentEngine(agent, user_id, db)
+        engine = AgentEngine(agent, user_id, db, store)
 
         response_message = await thread_message_repo.add(ThreadMessage(
             text="",
@@ -370,6 +371,7 @@ class BackgroundTestSuiteRunner:
         user_id: int,
         suite_run_id: int,
         stop_event: asyncio.Event,
+        store: BaseStore,
     ) -> None:
         # Event writes use a dedicated session, separate from the main DB session.
         # Tools like docs add Usage objects to the main session; SQLAlchemy's
@@ -434,7 +436,7 @@ class BackgroundTestSuiteRunner:
                     })
 
                     async for event_type, content in self._run_test_case_stream(
-                        db, test_case, agent, user_id, pending_results[test_case.thread_id], stop_event
+                        db, test_case, agent, user_id, pending_results[test_case.thread_id], stop_event, store
                     ):
                         if event_type == TestCaseEventType.PHASE and content.get("phase") == "completed":
                             status_value = content.get("status")

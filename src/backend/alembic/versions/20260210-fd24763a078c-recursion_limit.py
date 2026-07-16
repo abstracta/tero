@@ -1,7 +1,7 @@
 """recursion-limit
 
 Revision ID: fd24763a078c
-Revises: 613cc99427e2
+Revises: 8cf370c923b4
 Create Date: 2026-02-10 12:30:05.846201
 
 """
@@ -14,7 +14,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "fd24763a078c"
-down_revision: Union[str, None] = "613cc99427e2"
+down_revision: Union[str, None] = "8cf370c923b4"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

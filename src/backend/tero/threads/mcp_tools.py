@@ -5,20 +5,22 @@ from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from langgraph.errors import GraphRecursionError
+from langgraph.store.base import BaseStore
 from pydantic import BaseModel, Field
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from ..core.api import MCP_PATH
 from ..core.auth import get_current_user
 from ..core.repos import get_db
+from .agents_store import get_store
 from ..tools.auth import ToolAuthRequestException
 from ..usage.domain import MessageUsage
 from ..usage.repos import UsageRepository
 from ..users.domain import User
-from .api import find_or_create_thread, _find_thread
+from .api import find_or_create_thread, _find_thread, _build_and_save_thread_name
 from .domain import ThreadMessage, ThreadMessageOrigin, AgentMessageEvent
-from .engine import build_thread_name, AgentEngine
-from .repos import ThreadRepository, ThreadMessageRepository
+from .engine import AgentEngine
+from .repos import ThreadMessageRepository
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,7 @@ async def send_message(
         body: McpSendMessageRequest,
         user: Annotated[User, Depends(get_current_user)],
         db: Annotated[AsyncSession, Depends(get_db)],
+        store: Annotated[BaseStore, Depends(get_store)],
 ) -> McpMessageResponse:
     """
     Send a message in a conversation and get the agent's full response.
@@ -76,7 +79,7 @@ async def send_message(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Monthly usage quota exceeded")
 
     try:
-        engine = AgentEngine(thread.agent, user.id, db)
+        engine = AgentEngine(thread.agent, user.id, db, store)
         async with AsyncExitStack() as stack:
             await engine.load_tools(stack)
     except ToolAuthRequestException:
@@ -99,13 +102,17 @@ async def send_message(
 
     thread_messages = await repo.find_previous_messages(user_message)
     if len(thread_messages) == 0:
-        thread.name = await build_thread_name(body.message, message_usage, db)
-        await ThreadRepository(db).update(thread)
+        asyncio.create_task(_build_and_save_thread_name(
+            thread_id=thread.id,
+            user_id=user.id,
+            message_text=body.message,
+            parent_message_id=user_message.id,
+        ))
 
     complete_answer = ""
     try:
         stop_event = asyncio.Event()
-        answer_stream = AgentEngine(thread.agent, user.id, db).answer(
+        answer_stream = AgentEngine(thread.agent, user.id, db, store).answer(
             [*thread_messages, user_message], message_usage, stop_event,
         )
         async for event in answer_stream:

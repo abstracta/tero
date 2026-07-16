@@ -40,9 +40,8 @@ class OpenAIProvider(AiModelProvider):
         )
         return response.text
 
-    def build_embedding(self, model: str, usage_tracker: Callable[[int], None]) -> Embeddings:
-        return UsageTrackingOpenAIEmbeddings(
-            usage_tracker=usage_tracker,
+    def build_embedding(self, model: str) -> Embeddings:
+        return OpenAIEmbeddings(
             api_key=env.openai_api_key,
             embedding_ctx_length=env.embedding_context_limit,
             model=env.openai_model_id_mapping[model])
@@ -61,6 +60,7 @@ class ReasoningTokenCountingChatOpenAI(ChatOpenAI):
     def _get_encoding_model(self) -> tuple[str, tiktoken.Encoding]:
         return get_encoding_model(self.model_name, lambda: ChatOpenAI._get_encoding_model(self))
 
+    # override this method to avoid failing token count when using gpt 5 codex which returns reasoning elements in message
     def get_num_tokens_from_messages(self, messages: Sequence[BaseMessage], tools: Optional[Sequence[Any]] = None) -> int:
         return get_num_tokens_from_messages_sanitizing_unsupported_blocks(
             token_counter=super().get_num_tokens_from_messages,
@@ -85,7 +85,7 @@ def get_num_tokens_from_messages_sanitizing_unsupported_blocks(
     tools: Optional[Sequence[Any]],
 ) -> int:
     if _has_unsupported_blocks(messages):
-        messages = sanitize_messages_for_token_count(messages)
+        messages = _sanitize_messages_for_token_count(messages)
     return token_counter(messages, tools)
 
 
@@ -100,12 +100,12 @@ def _has_unsupported_blocks(messages: Sequence[BaseMessage]) -> bool:
     )
 
 
-def sanitize_messages_for_token_count(messages: Sequence[BaseMessage]) -> list[BaseMessage]:
-    sanitized_messages: list[BaseMessage] = []
+def _sanitize_messages_for_token_count(messages: Sequence[BaseMessage]) -> list[BaseMessage]:
+    ret = []
     for message in messages:
         content = message.content
         if not isinstance(content, list):
-            sanitized_messages.append(message)
+            ret.append(message)
             continue
 
         cleaned_content = [
@@ -114,10 +114,10 @@ def sanitize_messages_for_token_count(messages: Sequence[BaseMessage]) -> list[B
             if not (isinstance(item, dict) and item.get("type") in _UNSUPPORTED_TOKEN_COUNT_BLOCK_TYPES)
         ]
 
-        sanitized_messages.append(
+        ret.append(
             message.model_copy(update={"content": cleaned_content})
         )
-    return sanitized_messages
+    return ret
 
 
 class UsageTrackingOpenAIEmbeddings(OpenAIEmbeddings):

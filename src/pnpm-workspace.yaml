@@ -2,3 +2,12 @@ packages:
   - "common"
   - "frontend"
   - "browser-extension"
+  - "cli"
+
+allowBuilds:
+  "@parcel/watcher": false
+  esbuild: false
+  inotify: false
+  protobufjs: false
+  spawn-sync: false
+  vue-demi: false

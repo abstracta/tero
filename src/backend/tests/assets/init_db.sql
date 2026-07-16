@@ -15,7 +15,9 @@ insert into llm_model (id, name, model_type, description, model_vendor, token_li
 ('gpt-5-mini', 'GPT-5 Mini', 'REASONING', 'This is a new reasoning model with a good balance between cost and intelligence. Suited for most agent tasks.', 'OPENAI', 400000, 128000, 0.00025, 0.002),
 ('gpt-5-nano', 'GPT-5 Nano', 'REASONING', 'This is a new reasoning model for simpler tasks. Lower cost than GPT-5 Mini.', 'OPENAI', 4000000, 128000, 0.00005, 0.0004),
 ('gpt-5.1-codex-max', 'GPT-5.1 Codex Max', 'REASONING', 'This is the most capable Codex model for long-running agentic coding. Best for complex codebases and multi-step tasks. Similar pricing to GPT-5.1 Codex.', 'OPENAI', 400000, 128000, 0.00125, 0.01),
-('gpt-5.4', 'GPT-5.4', 'REASONING', 'This is the most capable reasoning model from OpenAI for professional work. Best for demanding analysis and complex agentic tasks. Higher cost than GPT-5.', 'OPENAI', 1050000, 128000, 0.0025, 0.015);
+('gpt-5.4', 'GPT-5.4', 'REASONING', 'This is the most capable reasoning model from OpenAI for professional work. Best for demanding analysis and complex agentic tasks. Higher cost than GPT-5.', 'OPENAI', 1050000, 128000, 0.0025, 0.015),
+('gpt-5.4-mini', 'GPT-5.4 Mini', 'REASONING', 'This is a fast reasoning model with strong performance. Suited for most agent tasks like research, drafting, and data analysis.', 'OPENAI', 400000, 128000, 0.00075, 0.0045),
+('claude-haiku-4-5', 'Claude Haiku 4.5', 'CHAT', 'This is a fast model suited for straightforward tasks. Good for summarization, extraction, and other tasks that don''t require complex reasoning.', 'ANTHROPIC', 200000, 64000, 0.001, 0.005);
 
 
 insert into team (name) values
@@ -33,13 +35,13 @@ insert into team_role (team_id, user_id, role, status) values
 (4, 2, 'TEAM_MEMBER', 'PENDING'),
 (4, 5, 'TEAM_MEMBER', 'REJECTED');
 
-insert into agent (name, description, user_id, last_update, team_id, model_id, system_prompt, temperature, reasoning_effort, recursion_limit, is_protected) values
-('Agent 1', 'This is the first agent', 1, '2025-02-21 12:00', Null, 'gpt-5-mini', 'You are a helpful AI agent.', 'PRECISE', 'LOW', 20, false),
-('Agent 2', 'This is the second agent', 1, '2025-02-21 12:01', 1, 'gpt-5-mini', 'You are a helpful AI agent.', 'CREATIVE', 'LOW', 20, false),
-('Agent 3', 'This is the third agent', 2, '2025-02-21 12:02', 4, 'gpt-5', 'You are a helpful AI agent.', 'PRECISE', 'LOW', 20, true),
-('Agent 4', 'This is the fourth agent', 2, '2025-02-21 12:03', Null, 'gpt-5', 'You are a helpful AI agent.', 'CREATIVE', 'LOW', 20, false),
-('Agent 5', 'This is the fifth agent', 2, '2025-02-21 12:04', 2, 'gpt-5', 'You are a helpful AI agent.', 'PRECISE', 'LOW', 20, false),
-('GPT-5 Nano', 'This is the default agent', Null, '2025-02-21 12:00', 1, 'gpt-5-nano', 'You are a helpful AI agent.', 'NEUTRAL', 'LOW', 20, false);
+insert into agent (name, description, user_id, last_update, team_id, model_id, system_prompt, temperature, reasoning_effort, recursion_limit, is_protected, agent_type) values
+('Agent 1', 'This is the first agent', 1, '2025-02-21 12:00', Null, 'gpt-5-mini', 'You are a helpful AI agent.', 'PRECISE', 'LOW', 20, false, 'REACT_AGENT'),
+('Agent 2', 'This is the second agent', 1, '2025-02-21 12:01', 1, 'gpt-5-mini', 'You are a helpful AI agent.', 'CREATIVE', 'LOW', 20, false, 'DEEP_AGENT'),
+('Agent 3', 'This is the third agent', 2, '2025-02-21 12:02', 4, 'gpt-5', 'You are a helpful AI agent.', 'PRECISE', 'LOW', 20, true, 'REACT_AGENT'),
+('Agent 4', 'This is the fourth agent', 2, '2025-02-21 12:03', Null, 'gpt-5', 'You are a helpful AI agent.', 'CREATIVE', 'LOW', 20, false, 'REACT_AGENT'),
+('Agent 5', 'This is the fifth agent', 2, '2025-02-21 12:04', 2, 'gpt-5', 'You are a helpful AI agent.', 'PRECISE', 'LOW', 20, false, 'REACT_AGENT'),
+('GPT-5 Nano', 'This is the default agent', Null, '2025-02-21 12:00', 1, 'gpt-5-nano', 'You are a helpful AI agent.', 'NEUTRAL', 'LOW', 20, false, 'REACT_AGENT');
 
 insert into user_agent (user_id, agent_id, creation) values
 (1, 1, '2025-02-21 12:00'),

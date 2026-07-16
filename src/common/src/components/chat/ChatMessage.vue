@@ -114,8 +114,8 @@ export class ChatUiMessage {
 import { computed, nextTick, ref, onMounted, onBeforeUnmount } from 'vue'
 import { escapeHtml } from 'markdown-it/lib/common/utils'
 import { useI18n } from 'vue-i18n'
-import { IconEditCircle, IconSquareRoundedPlus, IconChevronLeft, IconChevronRight, IconAlertTriangleFilled } from '@tabler/icons-vue'
-import { initializeResizeObserver, renderMarkDown, initializeCodeCopyHandler } from '../../utils/formatter'
+import { IconEditCircle, IconSquareRoundedPlus, IconChevronLeft, IconChevronRight } from '@tabler/icons-vue'
+import { initializeResizeObserver, renderMarkDown, initializeCodeActionHandler } from '../../utils/formatter'
 import { UserFeedback } from "../../utils/domain";
 import ChatInput from './ChatInput.vue';
 
@@ -147,9 +147,9 @@ const attachedEditFiles = ref<UploadedFile[]>([])
 let observer: (() => void) | null = null
 
 onMounted(() => {
+  initializeCodeActionHandler(t)
   if (messageElement.value) {
     observer = initializeResizeObserver(messageElement.value)
-    initializeCodeCopyHandler(t)
   }
 })
 
@@ -200,6 +200,12 @@ const handlePreviousMessage = () => {
 const handleNextMessage = () => {
   if (props.selectedIndex < props.siblingsCount - 1) {
     emit('selectMessageBranch', props.selectedIndex + 1)
+  }
+}
+
+const handleRetryMessage = () => {
+  if (props.message.parent) {
+    emit('editMessage', props.message.parent.text, props.message.parent.files)
   }
 }
 </script>
@@ -257,20 +263,20 @@ const handleNextMessage = () => {
         :status-updates="message.statusUpdates"
         :is-complete="message.isStatusComplete"
       />
-      <div class="flex gap-4 min-w-[0]">
+      <div v-if="message.text" class="flex gap-4 min-w-[0]">
         <div v-html="renderedMsg" ref="messageElement" class="flex flex-col w-full leading-tight gap-2 overflow-x-auto"></div>
       </div>
       <div v-if="message.files && message.files.length" class="mt-2">
         <ChatAttachments variant="message" :message-id="message.id" :attached-files="message.files" style="max-width: 80vw" @view-file="emit('viewFile', $event)" />
       </div>
+      <div v-if="message.stopped" class="bg-surface-muted rounded-xl p-2 my-4 flex items-center justify-between gap-2">
+        <span class="text-content-muted text-sm">{{ t('stoppedMessage') }}</span>
+        <SimpleButton v-if="isLastMessage" @click="handleRetryMessage" variant="primary" shape="square">
+          {{ t('retryButton') }}
+        </SimpleButton>
+      </div>
       <div class="flex justify-end items-center">
         <ChatMessageResponseFeedback v-if="isLastMessage && !isEditingAgent" :message="message" :actions-enabled="actionsEnabled" :is-feedback-loading="isFeedbackLoading" @feedback-change="emit('feedbackChange', $event)" />
-        <div v-else-if="message.stopped" class="flex flex-col items-end gap-2" :class="!actionsEnabled ? 'invisible' : ''">
-          <div class="flex items-center gap-2 border-1 rounded-xl px-3 py-2 text-sm text-content">
-            <IconAlertTriangleFilled class="text-warn" />
-            {{ t('stoppedMessage') }}
-          </div>
-        </div>
       </div>
     </div>
   </div>
@@ -283,18 +289,22 @@ const handleNextMessage = () => {
     "editMessageButton": "Edit message",
     "sendButton": "Send",
     "cancelButton": "Cancel",
-    "copyCodeButton": "Copy code",
+    "copyCodeButton": "Copy",
+    "downloadCodeButton": "Download",
     "copiedMessage": "Copied!",
-    "stoppedMessage": "You stopped the response generation."
+    "stoppedMessage": "The response was interrupted before it finished.",
+    "retryButton": "Regenerate"
   },
   "es": {
     "createPromptButton": "Crear prompt a partir de mensaje",
     "editMessageButton": "Editar mensaje",
     "sendButton": "Enviar",
     "cancelButton": "Cancelar",
-    "copyCodeButton": "Copiar código",
+    "copyCodeButton": "Copiar",
+    "downloadCodeButton": "Descargar",
     "copiedMessage": "Copiado!",
-    "stoppedMessage": "Detuviste la generación de la respuesta."
+    "stoppedMessage": "La generación se interrumpió antes de finalizar.",
+    "retryButton": "Generar de nuevo"
   }
 }
 </i18n>

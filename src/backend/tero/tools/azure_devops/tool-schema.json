@@ -1,0 +1,42 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+        "tenantId": {
+            "type": "string",
+            "description": "Microsoft Entra tenant ID",
+            "minLength": 1
+        },
+        "clientId": {
+            "type": "string",
+            "description": "Microsoft Entra application client ID",
+            "minLength": 1
+        },
+        "clientSecret": {
+            "type": "string",
+            "writeOnly": true,
+            "description": "Microsoft Entra application client secret",
+            "minLength": 1
+        },
+        "scope": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": [
+                    "profile",
+                    "project",
+                    "work",
+                    "work_write",
+                    "test",
+                    "test_write"
+                ]
+            },
+            "description": "Delegated Azure DevOps permissions granted to the Entra app",
+            "minItems": 1,
+            "uniqueItems": true
+        }
+    },
+    "x-oauth-redirect": true,
+    "required": ["tenantId", "clientId", "clientSecret", "scope"],
+    "additionalProperties": false
+}

@@ -19,7 +19,7 @@ jobs:
           lfs: true
       - uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: 23
@@ -39,7 +39,7 @@ jobs:
           lfs: true
       - uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: 23

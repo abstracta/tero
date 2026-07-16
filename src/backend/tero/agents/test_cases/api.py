@@ -9,11 +9,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sse_starlette.event import ServerSentEvent
+from langgraph.store.base import BaseStore
 
 from ...core.api import with_heartbeat
 from ...core.auth import get_current_user
 from ...core.repos import get_db
 from ...users.domain import User
+from ...threads.agents_store import get_store
 from ...threads.domain import Thread, ThreadMessage, ThreadMessageOrigin, ThreadMessagePublic, MAX_THREAD_NAME_LENGTH
 from ...threads.engine import AgentEngine
 from ...threads.repos import ThreadMessageRepository, ThreadRepository
@@ -132,7 +134,8 @@ async def run_test_suite(
     agent_id: int,
     request: RunTestSuiteRequest,
     user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)]
+    db: Annotated[AsyncSession, Depends(get_db)],
+    store: Annotated[BaseStore, Depends(get_store)],
 ) -> TestSuiteRun:
     agent = await find_editable_agent(agent_id, user, db)
 
@@ -155,7 +158,7 @@ async def run_test_suite(
 
     # Initialize engine to trigger any tool authentication requirements before creating suite run
     try:
-        engine = AgentEngine(agent, user.id, db)
+        engine = AgentEngine(agent, user.id, db, store)
         async with AsyncExitStack() as stack:
             await engine.load_tools(stack)
     except ToolAuthRequestException as e:
@@ -187,7 +190,8 @@ async def run_test_suite(
                 test_case_ids_to_run,
                 user.id,
                 suite_run.id,
-                stop_event
+                stop_event,
+                store,
             )
         finally:
             stop_event.set()

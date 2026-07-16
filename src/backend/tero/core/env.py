@@ -29,7 +29,6 @@ class Settings(BaseSettings):
     allowed_users : list[str] = []
     disable_publish_global : Optional[bool] = False
     contact_email : str
-    azure_app_insights_connection : Optional[str] = None
     azure_endpoints : list[str] = []
     azure_api_keys : list[SecretStr] = []
     azure_api_version : Optional[str] = None
@@ -45,7 +44,6 @@ class Settings(BaseSettings):
     internal_evaluator_model : Optional[str] = None
     agent_default_model : Optional[str] = None
     agent_basic_models : List[str]
-    agent_base_cost_model : Optional[str] = None
     default_agent_name : str
     embedding_model : str
     embedding_context_limit : int = 8191
@@ -55,6 +53,8 @@ class Settings(BaseSettings):
     aws_secret_access_key : Optional[SecretStr] = None
     aws_region : str
     aws_model_id_mapping : dict[str, str]
+    aws_textract_cost_per_1k_pages_usd : Optional[float] = None
+    aws_s3_bucket : Optional[str] = None
     google_api_key : Optional[SecretStr] = None
     google_model_id_mapping : dict[str, str]
     openai_api_key : Optional[SecretStr] = None
@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     web_tool_google_cost_per_1k_searches_usd : float
     browser_tool_playwright_mcp_url : str
     browser_tool_playwright_output_dir : str
+    smtp_hostname : Optional[str] = None
+    smtp_port : Optional[int] = None
+    smtp_username : Optional[str] = None
+    smtp_password : Optional[SecretStr] = None
 
     def is_local_env(self) -> bool:
         found = re.search('@([^/]+)(?:\\d+)?/', self.db_url)
@@ -88,6 +92,8 @@ class Settings(BaseSettings):
     @field_validator('azure_model_deployments', mode='before')
     @classmethod
     def decode_model_deployments(cls, v: str) -> dict[str, AzureModelDeployment]:
+        if not v:
+            return {}
         ret = {}
         for pair in v.split(','):
             model_id, deployment = pair.split(':', 1)
@@ -114,7 +120,6 @@ class Settings(BaseSettings):
     def set_defaults(self):
         self.agent_default_model = self.agent_default_model or self.internal_generator_model
         self.internal_evaluator_model = self.internal_evaluator_model or self.internal_generator_model
-        self.agent_base_cost_model = self.agent_base_cost_model or self.agent_default_model
         return self
 
     @model_validator(mode="after")
