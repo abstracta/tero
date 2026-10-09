@@ -12,6 +12,9 @@
     "lint:oxlint": "oxlint . --fix -D correctness --ignore-path .gitignore",
     "lint:eslint": "eslint . --fix",
     "lint": "run-s lint:*",
+    "lint-check:oxlint": "oxlint . -D correctness --ignore-path .gitignore",
+    "lint-check:eslint": "eslint .",
+    "lint-check": "run-s lint-check:*",
     "format": "prettier --write src/"
   },
   "dependencies": {

@@ -73,6 +73,7 @@ defineExpose({
                 handleError: handleError
             }"
             :enable-prompts="enablePrompts"
+            :insert-prompt-as-text="true"
             :readonly-prompts="true"
             :borderless="true"
             @send="isEditing ? $emit('save') : $emit('send')">

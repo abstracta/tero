@@ -1,9 +1,10 @@
 <script lang="ts" setup>
-import { onMounted, ref, computed, watch } from 'vue'
+import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { useRoute, onBeforeRouteUpdate, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Agent, AgentType, ApiService, HttpError, LlmModel, AgentToolConfig, AutomaticAgentField, Team, TestCase, TestSuiteRun, GLOBAL_TEAM_ID, Role, TeamRoleStatus, findManifest, type AgentImportResult } from '@/services/api'
-import { IconPencil, IconListDetails, IconLock, IconDeviceFloppy, IconPackageExport, IconPackageImport } from '@tabler/icons-vue'
+import { Agent, AgentType, ApiService, HttpError, LlmModel, AgentToolConfig, AutomaticAgentField, Team, TestCase, TestSuiteRun, GLOBAL_TEAM_ID, OWNER_ROLES, TeamRoleStatus, findManifest, type AgentImportResult } from '@/services/api'
+import { isSubagentToolId, parseSubagentId } from '@tero/common/utils/toolConfig.js'
+import { IconPencil, IconListDetails, IconLock, IconDeviceFloppy, IconPackageExport, IconPackageImport, IconLayoutSidebarLeftExpand, IconBug } from '@tabler/icons-vue'
 import { useErrorHandler } from '@/composables/useErrorHandler'
 import { useAgentStore } from '@/composables/useAgentStore'
 import { useAgentPromptStore } from '@/composables/useAgentPromptStore'
@@ -15,13 +16,14 @@ import AgentCollapsibleSection from './AgentCollapsibleSection.vue'
 import moment from 'moment'
 
 const props = defineProps<{
-  selectedThreadId: number
+  selectedThreadId?: number
   loadingTests?: boolean
   editingTestcase?: boolean
   testCases?: TestCase[]
   isComparingResultWithTestSpec?: boolean
   testSpecMessages?: AgentTestcaseChatUiMessage[]
   initialTab?: string
+  isCollapsed?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -31,6 +33,7 @@ const emit = defineEmits<{
   (e: 'runSingleTest', testCaseId: number): void
   (e: 'importAgent' ): void
   (e: 'selectExecution', execution: TestSuiteRun): void
+  (e: 'toggleCollapsed'): void
 }>()
 
 const { t } = useI18n()
@@ -57,11 +60,41 @@ const isGenerating = ref({
 const nameMaxLength = 30
 const descriptionMaxLength = 100
 const showShareConfirmation = ref(false)
+const showAgentTypeConfirmation = ref(false)
+const switchingAgentType = ref(false)
 const starters = ref<AgentPrompt[]>([])
 const { agentsPromptStore, loadAgentPrompts, removePrompt, setPrompts } = useAgentPromptStore()
 const publishPrompts = ref(false)
 const privatePromptsCount = computed(() => agentsPromptStore.prompts.filter(p => !p.shared).length)
+const SKELETON_DELAY_MS = 400
+const SKELETON_MIN_MS = 500
 const isLoading = ref(true)
+const showSkeleton = ref(false)
+let skeletonShowTimer: ReturnType<typeof setTimeout> | undefined
+let skeletonHideTimer: ReturnType<typeof setTimeout> | undefined
+let skeletonShownAt = 0
+
+watch(isLoading, (loading) => {
+  clearTimeout(skeletonShowTimer)
+  clearTimeout(skeletonHideTimer)
+  if (loading) {
+    skeletonShowTimer = setTimeout(() => {
+      showSkeleton.value = true
+      skeletonShownAt = Date.now()
+    }, SKELETON_DELAY_MS)
+    return
+  }
+  if (!showSkeleton.value) return
+  const remaining = SKELETON_MIN_MS - (Date.now() - skeletonShownAt)
+  skeletonHideTimer = setTimeout(() => {
+    showSkeleton.value = false
+  }, Math.max(0, remaining))
+}, { immediate: true })
+
+onUnmounted(() => {
+  clearTimeout(skeletonShowTimer)
+  clearTimeout(skeletonHideTimer)
+})
 const teams = ref<Team[]>([])
 const defaultTeams = ref<Team[]>([new Team(0, t('private'))])
 const selectedTeam = ref<number | null>(null)
@@ -86,13 +119,13 @@ const AGENT_TYPE_OPTIONS = [
 const lastSavedAt = ref<Date | null>(null)
 const isGlobalOwner = ref(false)
 
-const isOlderThanOneDay = computed(() => {
-  return moment().diff(moment.utc(lastSavedAt.value).local(), 'days') >= 1
+const isSavedOnDifferentDay = computed(() => {
+  return !moment.utc(lastSavedAt.value).local().isSame(moment(), 'day')
 })
 
 const formattedSavedTime = computed(() => {
   const saved = moment.utc(lastSavedAt.value).local()
-  if (isOlderThanOneDay.value) {
+  if (isSavedOnDifferentDay.value) {
     return saved.format('MMM D, YYYY')
   }
   return saved.format('h:mm A')
@@ -102,6 +135,7 @@ const loadAgentData = async (agentIdStr: string) => {
   const agentId = parseInt(agentIdStr)
   if (isNaN(agentId)) return
 
+  isLoading.value = true
   try {
     agent.value = await api.findAgentById(agentId)
     toolConfigs.value = await api.findAgentToolConfigs(agentId)
@@ -128,7 +162,7 @@ onMounted(async () => {
     const manifest = await findManifest()
     const user = await loadUserProfile()
     isGlobalOwner.value = user!.teams.some(t =>
-      t.role === Role.TEAM_OWNER && t.id === GLOBAL_TEAM_ID && t.status === TeamRoleStatus.ACCEPTED
+      OWNER_ROLES.includes(t.role) && t.id === GLOBAL_TEAM_ID && t.status === TeamRoleStatus.ACCEPTED
     )
 
     if (!manifest.disablePublishGlobal || isGlobalOwner.value) {
@@ -155,6 +189,40 @@ onBeforeRouteUpdate(async (to) => {
 
 const onClose = async () => {
   await router.push(`/chat/${props.selectedThreadId}`)
+}
+
+const unsharedSubagentNames = ref('')
+
+const findConfiguredSubagentToolConfigs = () => {
+  return toolConfigs.value.filter((config) => isSubagentToolId(config.toolId))
+}
+
+const findUnsharedSubagentNames = async (teamId: number | null): Promise<string[]> => {
+  if (!teamId) {
+    return []
+  }
+  const ids = findConfiguredSubagentToolConfigs()
+    .map((config) => parseSubagentId(config.toolId))
+    .filter((id): id is number => id != null)
+  if (ids.length === 0) {
+    return []
+  }
+  const unsharedSubagents: string[] = []
+  await Promise.all(ids.map(async (id) => {
+    try {
+      const subagent = await api.findAgentById(id)
+      if (subagent.team?.id !== teamId && subagent.team?.id !== GLOBAL_TEAM_ID) {
+        unsharedSubagents.push(subagent.name!)
+      }
+    } catch (e) {
+      if (e instanceof HttpError && e.status === 404) {
+        unsharedSubagents.push(t('unavailableSubagent'))
+        return
+      }
+      handleError(e)
+    }
+  }))
+  return unsharedSubagents
 }
 
 const checkAgentFields = () => {
@@ -229,8 +297,14 @@ const updateAgent = async () => {
 const onChangeTeam = async (team: number | null) => {
   if (team !== agent.value?.team?.id) {
     publishPrompts.value = false
-    invalidAttrs.value = checkAgentFields();
-    showShareConfirmation.value = true;
+    invalidAttrs.value = ''
+    const names = await findUnsharedSubagentNames(team)
+    if (selectedTeam.value !== team) return
+    unsharedSubagentNames.value = names.join(', ')
+    if (!unsharedSubagentNames.value) {
+      invalidAttrs.value = checkAgentFields()
+    }
+    showShareConfirmation.value = true
   }
 }
 
@@ -241,6 +315,7 @@ const onConfirmChangeTeam = async () => {
 
 const onCancelChangeTeam = async () => {
   selectedTeam.value = agent.value?.team?.id ?? 0;
+  unsharedSubagentNames.value = ''
   showShareConfirmation.value = false
 }
 
@@ -303,6 +378,9 @@ const isSelectedPublicTeam = computed(() => selectedTeam.value != null && select
 const hasPublishableTeams = computed(() => teams.value.some(t => t.id > 0))
 
 const shareDialogTranslationKey = computed(() => {
+  if (unsharedSubagentNames.value) {
+    return 'shareMissingSubagents'
+  }
   if (invalidAttrs.value) {
     return isSelectedPublicTeam.value ? 'shareInvalidAttrs' : 'unshareInvalidAttrs'
   }
@@ -319,7 +397,8 @@ const shareDialogTranslationKey = computed(() => {
 
 const shareDialogTranslationParams = computed(() => ({
   invalidAttrs: invalidAttrs.value,
-  team: findTeam(selectedTeam.value!)?.name
+  team: findTeam(selectedTeam.value!)?.name,
+  subagents: unsharedSubagentNames.value,
 }))
 
 const exportAgent = async () => {
@@ -377,9 +456,47 @@ const onUpdateProtectedSettings = async (value: boolean) => {
 }
 
 const onUpdateAgentType = async (value: AgentType) => {
-  if (!agent.value) return
+  if (!agent.value || value === agent.value.agentType) return
+
+  if (
+    agent.value.agentType === AgentType.DEEP_AGENT
+    && value === AgentType.REACT_AGENT
+    && findConfiguredSubagentToolConfigs().length > 0
+  ) {
+    invalidAttrs.value = checkAgentFields()
+    showAgentTypeConfirmation.value = true
+    return
+  }
+
   agent.value.agentType = value
   await updateAgent()
+}
+
+const onUpdateMemoryEnabled = async (value: boolean) => {
+  if (!agent.value) return
+  agent.value.memoryEnabled = value
+  await updateAgent()
+}
+
+const onConfirmAgentTypeChange = async () => {
+  if (!agent.value) return
+  switchingAgentType.value = true
+  const previousAgentType = agent.value.agentType
+  try {
+    agent.value.agentType = AgentType.REACT_AGENT
+    await updateAgent()
+    if (backendAgent.value?.agentType !== AgentType.REACT_AGENT) {
+      agent.value.agentType = previousAgentType
+      return
+    }
+    await onUpdateToolConfigs()
+    showAgentTypeConfirmation.value = false
+  } catch (error) {
+    agent.value.agentType = previousAgentType
+    handleError(error)
+  } finally {
+    switchingAgentType.value = false
+  }
 }
 
 const onSelectExecution = (execution: TestSuiteRun) => {
@@ -410,7 +527,24 @@ const onGenerate = async () => {
 </script>
 
 <template>
-  <Tabs v-model:value="activeTab" class="h-full flex flex-col pb-6">
+  <FlexCard v-show="isCollapsed" class="h-full px-1 sm:px-2">
+    <template #header>
+      <div class="flex flex-col items-center">
+        <SimpleButton @click="emit('toggleCollapsed')" style="transition: all 0.3s ease;">
+          <IconLayoutSidebarLeftExpand />
+        </SimpleButton>
+      </div>
+    </template>
+    <div class="flex flex-col items-center gap-2">
+      <SimpleButton :variant="activeTab === '0' ? 'primary' : undefined" @click="() => { emit('toggleCollapsed'); activeTab = '0' }">
+        <IconPencil />
+      </SimpleButton>
+      <SimpleButton :variant="activeTab === '1' ? 'primary' : undefined" @click="() => { emit('toggleCollapsed'); activeTab = '1' }">
+        <IconBug />
+      </SimpleButton>
+    </div>
+  </FlexCard>
+  <Tabs v-show="!isCollapsed" v-model:value="activeTab" class="h-full flex flex-col" style="transition: all 0.3s ease;">
     <FlexCard header-height="auto" header-class="!py-0" class="flex flex-col h-full">
       <template #header>
         <div v-if="isComparingResultWithTestSpec && testSpecMessages" class="flex flex-row gap-2 items-center min-h-[73px]">
@@ -460,8 +594,8 @@ const onGenerate = async () => {
       </div>
       <TabPanels v-else class="flex-1 !p-0.5 overflow-hidden">
         <TabPanel value="0" class="h-full overflow-y-auto">
-          <AgentEditorPanelSkeleton v-if="isLoading" />
-          <div class="flex flex-col gap-3 px-4 py-2 mb-4" v-if="agent && !isLoading">
+          <AgentEditorPanelSkeleton v-if="showSkeleton" />
+          <div class="flex flex-col gap-3 px-4 py-2 mb-10" v-if="agent && !showSkeleton">
             <AgentCollapsibleSection
               :title="t('basicInfoSectionTitle')"
               :collapsed="collapsed.basicInfo"
@@ -481,14 +615,14 @@ const onGenerate = async () => {
                 <div class="form-field relative gap-1">
                   <label class="!text-sm" for="name">{{ t('nameLabel') }}</label>
                   <InteractiveInput id="name" v-model="agent.name" :maxlength="nameMaxLength"
-                    :required="isSelectedPublicTeam" @blur="updateAgent" :placeholder="t('namePlaceholder')"
+                    :required="!!invalidAttrs" @blur="updateAgent" :placeholder="t('namePlaceholder')"
                     @end-icon-click="onGenerateDialog(AutomaticAgentField.NAME)" end-icon="IconWand" :loading="isGenerating.name" size="large" />
                   <span class="text-sm text-content-muted">{{ t('nameDescription')}}</span>
                 </div>
                 <div class="form-field relative gap-1">
                   <label class="!text-sm" for="description">{{ t('descriptionLabel') }}</label>
                   <InteractiveInput id="description" v-model="agent.description" :maxlength="descriptionMaxLength"
-                    :required="isSelectedPublicTeam" @blur="updateAgent" :placeholder="t('descriptionPlaceholder')"
+                    :required="!!invalidAttrs" @blur="updateAgent" :placeholder="t('descriptionPlaceholder')"
                     @end-icon-click="onGenerateDialog(AutomaticAgentField.DESCRIPTION)" end-icon="IconWand" :loading="isGenerating.description" size="large" />
                   <span class="text-sm text-content-muted">{{ t('descriptionDescription')}}</span>
                 </div>
@@ -527,7 +661,7 @@ const onGenerate = async () => {
                   <span class="text-sm text-content-muted">{{ t('systemPromptDescription') }}</span>
                 </div>
                 <div class="form-field">
-                  <AgentToolConfigsEditor :agent-id="agent.id" :tool-configs="toolConfigs" @update="onUpdateToolConfigs" />
+                  <AgentToolConfigsEditor :agent-id="agent.id" :agent-type="agent.agentType" :parent-team-id="agent.team?.id && agent.team.id > 0 ? agent.team.id : undefined" :tool-configs="toolConfigs" :refresh-tool-configs="onUpdateToolConfigs" @update="onUpdateToolConfigs" />
                 </div>
                 <div class="form-field relative">
                   <AgentConversationStarters :starters="starters" @delete="handleStarterDelete" :agent="agent"
@@ -562,6 +696,7 @@ const onGenerate = async () => {
               <div class="form-field flex flex-col gap-2 mb-6">
                 <label for="agentType">{{ t('agentType') }}</label>
                 <SelectButton
+                  :key="String(showAgentTypeConfirmation)"
                   id="agentType"
                   :model-value="agent.agentType"
                   :options="AGENT_TYPE_OPTIONS"
@@ -572,6 +707,17 @@ const onGenerate = async () => {
                   class="w-fit"
                 />
                 <p class="text-content-muted text-sm tool-message whitespace-pre-line">{{ t('agentTypeHelp') }}</p>
+              </div>
+              <div v-if="agent.agentType === AgentType.DEEP_AGENT" class="form-field flex flex-col gap-2 mb-6">
+                <div class="flex items-center gap-3">
+                  <ToggleSwitch
+                    id="persistentMemory"
+                    :model-value="agent.memoryEnabled"
+                    @update:model-value="onUpdateMemoryEnabled"
+                  />
+                  <label for="persistentMemory">{{ t('persistentMemory') }}</label>
+                </div>
+                <p class="text-content-muted text-sm tool-message whitespace-pre-line">{{ t('persistentMemoryHelp') }}</p>
               </div>
               <div class="form-field flex flex-col gap-1">
                 <label for="recursionLimit">{{ t('recursionLimit') }}</label>
@@ -605,25 +751,32 @@ const onGenerate = async () => {
         </TabPanel>
       </TabPanels>
     </FlexCard>
-    <div v-if="agent && !isLoading && activeTab === '0'" class="sticky bottom-0 z-10 flex items-center justify-center gap-2 px-4 py-3 text-sm border-t bg-content dark:bg-surface-muted text-surface dark:text-content rounded-b-2xl">
+    <div v-if="agent && !showSkeleton && activeTab === '0'" class="sticky bottom-0 z-10 flex items-center justify-center gap-2 px-4 py-3 text-sm border-t bg-content dark:bg-surface-muted text-surface dark:text-content rounded-b-2xl">
       <IconDeviceFloppy :size="18" :class="{ 'animate-pulse': isSaving }" />
       <span class="font-semibold">{{ isSaving ? t('savingChanges') : t('autoSaveMessage') }}</span>
       <template v-if="!isSaving && formattedSavedTime">
         <span class="text-surface dark:text-content">|</span>
-        <span class="text-surface-muted dark:text-content-muted">{{ t(isOlderThanOneDay ? 'savedOn' : 'savedAt', { time: formattedSavedTime }) }}</span>
+        <span class="text-surface-muted dark:text-content-muted">{{ t(isSavedOnDifferentDay ? 'savedOn' : 'savedAt', { time: formattedSavedTime }) }}</span>
       </template>
     </div>
   </Tabs>
 
   <Dialog v-model:visible="showShareConfirmation"
-    :header="t(isSelectedPublicTeam ? agent?.team?.id ? 'changeTeamConfirmationTitle' : 'shareConfirmationTitle' : 'unshareConfirmationTitle', { oldTeam: agent?.team?.name, newTeam: findTeam(selectedTeam!)?.name })"
+    :header="t(
+      isSelectedPublicTeam
+        ? agent?.team?.id
+          ? 'changeTeamConfirmationTitle'
+          : 'shareConfirmationTitle'
+        : 'unshareConfirmationTitle',
+      { oldTeam: agent?.team?.name, newTeam: findTeam(selectedTeam!)?.name }
+    )"
     :modal="true" :draggable="false" :resizable="false" :closable="false" class="max-w-200">
     <div class="flex flex-col gap-2">
       <div class="flex flex-row gap-2 items-start whitespace-pre-line">
-        <IconAlertTriangleFilled color="var(--color-warn)" v-if="invalidAttrs" />
+        <IconAlertTriangleFilled color="var(--color-warn)" :size="28" class="shrink-0" v-if="invalidAttrs || unsharedSubagentNames" />
         {{ t(shareDialogTranslationKey, shareDialogTranslationParams) }}
       </div>
-      <div v-if="!invalidAttrs && isSelectedPublicTeam && privatePromptsCount > 0"
+      <div v-if="!invalidAttrs && !unsharedSubagentNames && isSelectedPublicTeam && privatePromptsCount > 0"
         class="flex items-center gap-2 py-4 mt-3 border-t-1">
         <div class="flex flex-row gap-2 items-start">
           <ToggleSwitch v-model="publishPrompts" />
@@ -634,10 +787,30 @@ const onGenerate = async () => {
         </div>
       </div>
       <div class="flex flex-row gap-2 justify-end">
-        <SimpleButton @click="onCancelChangeTeam" shape="square" variant="secondary">{{ t('cancel') }}</SimpleButton>
-        <SimpleButton @click="onConfirmChangeTeam" v-if="!invalidAttrs" variant="primary" shape="square">{{ t(
-          invalidAttrs ? 'backToEdit' : isSelectedPublicTeam ? agent?.team?.id ? 'changeTeam' : 'publish' : 'unpublish')
+        <SimpleButton @click="onCancelChangeTeam" shape="square" variant="secondary">{{ t(invalidAttrs || unsharedSubagentNames ? 'backToEdit' : 'cancel') }}</SimpleButton>
+        <SimpleButton @click="onConfirmChangeTeam" v-if="!invalidAttrs && !unsharedSubagentNames" variant="primary" shape="square">{{ t(
+          isSelectedPublicTeam ? agent?.team?.id ? 'changeTeam' : 'publish' : 'unpublish')
         }}</SimpleButton>
+      </div>
+    </div>
+  </Dialog>
+  <Dialog
+    v-model:visible="showAgentTypeConfirmation"
+    :header="t('agentTypeChangeConfirmationTitle')"
+    :modal="true"
+    :draggable="false"
+    :resizable="false"
+    :closable="false"
+    class="max-w-200"
+  >
+    <div class="flex flex-col gap-4">
+      <div class="flex flex-row gap-2 items-start whitespace-pre-line">
+        <IconAlertTriangleFilled color="var(--color-warn)" :size="28" class="shrink-0" />
+        {{ t(invalidAttrs ? 'agentTypeChangeInvalidAttrs' : 'agentTypeChangeConfirmationMessage', { invalidAttrs }) }}
+      </div>
+      <div class="flex flex-row gap-2 justify-end">
+        <SimpleButton @click="showAgentTypeConfirmation = false" shape="square" variant="secondary" :disabled="switchingAgentType">{{ t(invalidAttrs ? 'backToEdit' : 'cancel') }}</SimpleButton>
+        <SimpleButton v-if="!invalidAttrs" @click="onConfirmAgentTypeChange" variant="primary" shape="square" :loading="switchingAgentType">{{ t('agentTypeChangeConfirm') }}</SimpleButton>
       </div>
     </div>
   </Dialog>
@@ -666,6 +839,8 @@ const onGenerate = async () => {
     "shareConfirmationTitle": "Do you want to make this agent public?",
     "shareInvalidAttrs": "To share the agent you need to specify {invalidAttrs}.",
     "unshareInvalidAttrs": "To make this agent private you need to specify {invalidAttrs}.",
+    "shareMissingSubagents": "To share the agent you need to share these subagents with the same team: {subagents}.",
+    "unavailableSubagent": "a missing or unavailable subagent",
     "shareMissingName": "a name",
     "shareNameTooLong": "a shorter name",
     "shareMissingAnd": "and",
@@ -699,6 +874,12 @@ const onGenerate = async () => {
     "agentTypeBasicAgent": "Basic",
     "agentTypeAdvancedAgent": "Advanced",
     "agentTypeHelp": "Basic — faster responses for chat, drafting, and simple tasks. Best default for most agents.\nAdvanced — for complex multi-step work: offloads large context to files, summarizes long conversations, and tracks subtasks; useful when the agent relies heavily on tools or long-running workflows.",
+    "persistentMemory": "Persistent memory",
+    "persistentMemoryHelp": "Remembers useful information across chats with this agent. When disabled, existing memories are kept but the agent cannot access or change them. Re-enable it to use them again. Avoid storing secrets.",
+    "agentTypeChangeConfirmationTitle": "Switch to Basic mode?",
+    "agentTypeChangeConfirmationMessage": "Switching to Basic mode will remove the configured subagents. This agent will no longer be able to delegate work with the task tool.",
+    "agentTypeChangeInvalidAttrs": "To switch to Basic mode you need to specify {invalidAttrs}.",
+    "agentTypeChangeConfirm": "Switch and remove subagents",
     "recursionLimit": "Thought process steps limit",
     "recursionLimitHelpLine1": "Higher values increase budget usage and response time.",
     "recursionLimitHelpLine2": "Before increasing, optimize your agent to use fewer steps.",
@@ -727,6 +908,8 @@ const onGenerate = async () => {
     "shareConfirmationMessageTeam": "Cuando haces un agente público, este será visible para los miembros del equipo {team}, para que ellos puedan beneficiarse de lo que has creado.\n\nAdemás, todas las modificaciones futuras al agente estarán disponibles inmediatamente para el resto de sus usuarios.",
     "shareInvalidAttrs": "Para compartir el agente, primero necesitas especificar {invalidAttrs}.",
     "unshareInvalidAttrs": "Para hacer este agente privado, primero necesitas especificar {invalidAttrs}.",
+    "shareMissingSubagents": "Para compartir el agente, primero necesitas compartir estos subagentes en el mismo equipo: {subagents}.",
+    "unavailableSubagent": "un subagente faltante o no disponible",
     "shareMissingName": "un nombre",
     "shareNameTooLong": "un nombre más corto",
     "shareMissingAnd": "y",
@@ -758,6 +941,12 @@ const onGenerate = async () => {
     "agentTypeBasicAgent": "Básico",
     "agentTypeAdvancedAgent": "Avanzado",
     "agentTypeHelp": "Básico — respuestas más rápidas para chat, redacción y tareas simples. Mejor opción por defecto para la mayoría de los agentes.\nAvanzado — para trabajo complejo en varios pasos: transfiere contexto extenso a archivos, resume conversaciones largas y rastrea subtareas; útil cuando el agente usa muchas herramientas o flujos prolongados.",
+    "persistentMemory": "Memoria persistente",
+    "persistentMemoryHelp": "Recuerda información útil entre chats con este agente. Al desactivarla, los recuerdos existentes se conservan, pero el agente no puede consultarlos ni modificarlos. Vuelve a activarla para usarlos de nuevo. Evita guardar secretos.",
+    "agentTypeChangeConfirmationTitle": "¿Cambiar a modo Básico?",
+    "agentTypeChangeConfirmationMessage": "Al cambiar a modo Básico se eliminarán los subagentes configurados. Este agente ya no podrá delegar trabajo con el tool task.",
+    "agentTypeChangeInvalidAttrs": "Para cambiar a modo Básico, primero necesitas especificar {invalidAttrs}.",
+    "agentTypeChangeConfirm": "Cambiar y eliminar subagentes",
     "recursionLimit": "Límite de pasos del proceso de pensamiento",
     "recursionLimitHelpLine1": "Valores más altos aumentan el uso de presupuesto y el tiempo de respuesta.",
     "recursionLimitHelpLine2": "Antes de aumentar, optimiza tu agente para usar menos pasos.",

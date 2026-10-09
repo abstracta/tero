@@ -1,0 +1,335 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Notion API",
+    "version": "2026-03-11"
+  },
+  "servers": [
+    { "url": "https://api.notion.com" }
+  ],
+  "paths": {
+    "/v1/search": {
+      "post": {
+        "operationId": "search",
+        "summary": "Search pages and data sources by title across the workspace",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "description": "Text to search for in page or database titles. Omit to return all accessible content."
+                  },
+                  "filter": {
+                    "type": "object",
+                    "description": "Limit results to pages or data sources. Use property=object and value=page or data_source. Set in_trash=true to search trash.",
+                    "properties": {
+                      "property": { "type": "string", "enum": ["object"] },
+                      "value": { "type": "string", "enum": ["page", "data_source"] },
+                      "in_trash": { "type": "boolean" }
+                    }
+                  },
+                  "sort": {
+                    "type": "object",
+                    "properties": {
+                      "direction": { "type": "string", "enum": ["ascending", "descending"] },
+                      "timestamp": { "type": "string", "enum": ["last_edited_time"] }
+                    }
+                  },
+                  "start_cursor": { "type": "string" },
+                  "page_size": { "type": "integer", "minimum": 1, "maximum": 100 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Paginated list of matching pages and data sources",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "object": { "type": "string" },
+                          "id": { "type": "string" },
+                          "url": { "type": "string" },
+                          "created_time": { "type": "string" },
+                          "last_edited_time": { "type": "string" },
+                          "in_trash": { "type": "boolean" },
+                          "properties": { "type": "object" }
+                        }
+                      }
+                    },
+                    "next_cursor": { "type": "string", "nullable": true },
+                    "has_more": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pages/{page_id}": {
+      "get": {
+        "operationId": "getPage",
+        "summary": "Retrieve a Notion page and its properties",
+        "parameters": [
+          {
+            "name": "page_id",
+            "in": "path",
+            "required": true,
+            "description": "The ID of the Notion page",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page object with properties",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "object": { "type": "string" },
+                    "id": { "type": "string" },
+                    "url": { "type": "string" },
+                    "created_time": { "type": "string" },
+                    "last_edited_time": { "type": "string" },
+                    "in_trash": { "type": "boolean" },
+                    "properties": { "type": "object" },
+                    "parent": { "type": "object" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pages/{page_id}/markdown": {
+      "get": {
+        "operationId": "retrievePageMarkdown",
+        "summary": "Retrieve a page as enhanced markdown. Pass unknown_block_ids from truncated responses to fetch additional subtrees.",
+        "parameters": [
+          {
+            "name": "page_id",
+            "in": "path",
+            "required": true,
+            "description": "The ID of the page or block to retrieve as markdown",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "include_transcript",
+            "in": "query",
+            "required": false,
+            "description": "Whether to include meeting note transcripts. Defaults to false.",
+            "schema": { "type": "boolean" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page content rendered as enhanced markdown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "object": { "type": "string", "enum": ["page_markdown"] },
+                    "id": { "type": "string" },
+                    "markdown": { "type": "string" },
+                    "truncated": { "type": "boolean" },
+                    "unknown_block_ids": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "description": "Block IDs that could not be loaded. Pass back to this endpoint to fetch their content."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/databases/{database_id}": {
+      "get": {
+        "operationId": "getDatabase",
+        "summary": "Retrieve a database and its data sources. Use this when you have a database ID (from a Notion URL) to get the data_source_id needed to query rows.",
+        "parameters": [
+          {
+            "name": "database_id",
+            "in": "path",
+            "required": true,
+            "description": "The ID of the Notion database",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Database object with child data sources",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "object": { "type": "string" },
+                    "id": { "type": "string" },
+                    "title": { "type": "array" },
+                    "in_trash": { "type": "boolean" },
+                    "data_sources": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "name": { "type": "string" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/data_sources/{data_source_id}/query": {
+      "post": {
+        "operationId": "queryDataSource",
+        "summary": "Query and filter rows (pages) in a Notion data source. Use a data_source_id from search or from getDatabase, not a database ID.",
+        "parameters": [
+          {
+            "name": "data_source_id",
+            "in": "path",
+            "required": true,
+            "description": "The ID of the data source to query",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "filter": {
+                    "type": "object",
+                    "description": "Filter conditions. For a single property: { 'property': '<name>', '<type>': { '<operator>': <value> } }. For compound: { 'and': [...] } or { 'or': [...] }"
+                  },
+                  "sorts": {
+                    "type": "array",
+                    "description": "Sort order. Each item: { 'property': '<name>', 'direction': 'ascending'|'descending' } or { 'timestamp': 'created_time'|'last_edited_time', 'direction': '...' }",
+                    "items": { "type": "object" }
+                  },
+                  "start_cursor": { "type": "string" },
+                  "page_size": { "type": "integer", "minimum": 1, "maximum": 100 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Paginated list of pages matching the query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "object": { "type": "string" },
+                          "id": { "type": "string" },
+                          "url": { "type": "string" },
+                          "created_time": { "type": "string" },
+                          "last_edited_time": { "type": "string" },
+                          "in_trash": { "type": "boolean" },
+                          "properties": { "type": "object" }
+                        }
+                      }
+                    },
+                    "next_cursor": { "type": "string", "nullable": true },
+                    "has_more": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/blocks/{block_id}/children": {
+      "get": {
+        "operationId": "getBlockChildren",
+        "summary": "Retrieve the content blocks (children) of a page or block",
+        "parameters": [
+          {
+            "name": "block_id",
+            "in": "path",
+            "required": true,
+            "description": "The ID of the block or page whose children to retrieve",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "start_cursor",
+            "in": "query",
+            "required": false,
+            "description": "Pagination cursor from a previous response",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "description": "Number of results per page (max 100)",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of child blocks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "object": { "type": "string" },
+                          "id": { "type": "string" },
+                          "type": { "type": "string" },
+                          "has_children": { "type": "boolean" },
+                          "created_time": { "type": "string" },
+                          "last_edited_time": { "type": "string" },
+                          "in_trash": { "type": "boolean" }
+                        }
+                      }
+                    },
+                    "next_cursor": { "type": "string", "nullable": true },
+                    "has_more": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

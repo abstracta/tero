@@ -12,6 +12,7 @@ class BaseAgentPrompt(CamelCaseModel, abc.ABC):
     name: Optional[str] = Field(max_length=50, default=None)
     content: Optional[str] = Field(sa_column=Column(Text), default=None)
     shared: bool = Field(default=False, index=True)
+    collapsed: bool = Field(default=False)
 
 
 class AgentPromptCreate(BaseAgentPrompt):

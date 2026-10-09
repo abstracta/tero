@@ -1,13 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, toRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ApiService } from '@/services/api'
-import { AgentToolConfig, type AgentTool } from '@/services/api'
+import { AgentType, ApiService, AgentToolConfig, type AgentTool } from '@/services/api'
 import { useErrorHandler } from '@/composables/useErrorHandler'
+import { useToolConfigLabels } from '@/composables/useToolConfigLabels'
 import { type Icon } from '@tabler/icons-vue'
 import { EditingToolConfig } from './AgentToolConfigEditor.vue'
 import { IconEditCircle, IconEye, IconX } from '@tabler/icons-vue'
-import { findToolIcon, buildToolConfigName, mostUsedToolIds, toolIdKey } from '@tero/common/utils/toolConfig.js'
+import {
+  findToolIcon,
+  buildToolConfigName,
+  mostUsedToolIds,
+  toolIdKey,
+  isSubagentToolId,
+  parseSubagentId,
+} from '@tero/common/utils/toolConfig.js'
 import GroupedSelectPanel, { type GroupedSelectPanelOptionGroup } from '../common/GroupedSelectPanel.vue'
 
 const { t } = useI18n()
@@ -16,17 +23,23 @@ const { handleError } = useErrorHandler()
 
 const props = defineProps<{
   agentId: number
+  agentType?: AgentType
+  parentTeamId?: number | null
   toolConfigs: AgentToolConfig[]
   viewMode?: boolean
+  refreshToolConfigs?: () => Promise<void>
 }>()
 
 const emit = defineEmits<{
   (e: 'update'): void
 }>()
 
+const { toolConfigLabel } = useToolConfigLabels(toRef(props, 'toolConfigs'))
+
 const availableTools = ref<AgentTool[]>([])
 const editingToolConfig = ref<EditingToolConfig | null>(null)
 const deletingToolConfig = ref<string | null>(null)
+const deletingLoading = ref(false)
 
 onMounted(async () => {
   try {
@@ -34,6 +47,10 @@ onMounted(async () => {
   } catch (error) {
     handleError(error)
   }
+})
+
+watch(() => props.agentId, () => {
+  editingToolConfig.value = null
 })
 
 const onConfigureNewTool = (tool: AgentTool, toolName: string, toolIcon: Icon) => {
@@ -51,7 +68,7 @@ const onCloseToolConfig = () => {
 
 const onEditToolConfig = (toolConfig: AgentToolConfig) => {
   const tool = getToolById(toolConfig.toolId)
-  editingToolConfig.value = new EditingToolConfig(props.agentId, tool!, buildToolConfigName(tool.id), findToolIcon(tool.id), toolConfig)
+  editingToolConfig.value = new EditingToolConfig(props.agentId, tool!, toolConfigLabel(toolConfig.toolId), findToolIcon(tool.id), toolConfig)
 }
 
 const hasConfigurableProperties = (toolId: string): boolean => {
@@ -69,12 +86,19 @@ const onDeleteToolConfig = (toolConfig: AgentToolConfig) => {
 }
 
 const onConfirmDelete = async (toolId: string) => {
-  deletingToolConfig.value = null
+  deletingLoading.value = true
   try {
     await api.removeAgentToolConfig(props.agentId, toolId)
-    emit('update')
+    if (props.refreshToolConfigs) {
+      await props.refreshToolConfigs()
+    } else {
+      emit('update')
+    }
   } catch (error) {
     handleError(error)
+  } finally {
+    deletingLoading.value = false
+    deletingToolConfig.value = null
   }
 }
 
@@ -91,9 +115,29 @@ const isMostUsedTool = (toolId: string) => {
   return mostUsedToolIds.includes(toolIdKey(toolId))
 }
 
+const configuredSubagentIds = computed(() => {
+  return props.toolConfigs
+    .map((config) => parseSubagentId(config.toolId))
+    .filter((id): id is number => id != null)
+})
+
+const editingExcludeAgentIds = computed(() => {
+  const ids = [props.agentId, ...configuredSubagentIds.value]
+  if (!editingToolConfig.value) {
+    return ids
+  }
+  const currentId = parseSubagentId(editingToolConfig.value.toolId)
+  return currentId == null ? ids : ids.filter((id) => id !== currentId)
+})
+
 const groupedToolOptions = computed<GroupedSelectPanelOptionGroup[]>(() => {
   const q = searchQuery.value.trim().toLowerCase()
-  let list = availableTools.value.filter((tool) => !props.toolConfigs.some((config) => config.toolId === tool.id))
+  let list = availableTools.value.filter((tool) => {
+    if (isSubagentToolId(tool.id)) {
+      return props.agentType === AgentType.DEEP_AGENT
+    }
+    return !props.toolConfigs.some((config) => config.toolId === tool.id)
+  })
   if (q) {
     list = list.filter((tool) => buildToolConfigName(tool.id).toLowerCase().includes(q) || tool.description?.toLowerCase().includes(q))
   }
@@ -188,13 +232,20 @@ const onToolSearch = (value: string) => {
     <div v-else class="flex flex-row flex-wrap gap-2 w-0 min-w-full">
       <div v-for="tool in toolConfigs" :key="tool.toolId" class="relative rounded-xl border-1">
         <!-- using absolute position flex and inset in confirmation and invisible in item with py to keep item confirmation the same size as element -->
-        <ItemConfirmation v-if="deletingToolConfig === tool.toolId" class="shadow-none !m-0 border-none flex-1 absolute inset-0" :tooltip="t('deleteToolConfigConfirmation')" @confirm="() => onConfirmDelete(tool.toolId)" @cancel="onCancelDelete" />
+        <ItemConfirmation
+          v-if="deletingToolConfig === tool.toolId"
+          class="shadow-none !m-0 border-none flex-1 absolute inset-0"
+          :tooltip="t('deleteToolConfigConfirmation')"
+          :loading="deletingLoading"
+          @confirm="() => onConfirmDelete(tool.toolId)"
+          @cancel="onCancelDelete"
+        />
         <div class="flex justify-between items-center py-3 px-2 min-w-45" :class="{ invisible: deletingToolConfig === tool.toolId }">
           <div class="flex flex-row items-center gap-2 pr-2">
             <div>
               <component :is="findToolIcon(tool.toolId)" />
             </div>
-            <span>{{ buildToolConfigName(tool.toolId) }}</span>
+            <span>{{ toolConfigLabel(tool.toolId) }}</span>
           </div>
           <div class="flex flex-row justify-center items-center border-l pl-2 gap-2">
             <SimpleIcon interactive v-if="hasConfigurableProperties(tool.toolId)" @click="onEditToolConfig(tool)" v-tooltip.bottom="viewMode ? t('viewToolConfig') : t('editToolConfig')" :icon="viewMode ? IconEye : IconEditCircle" />
@@ -205,7 +256,15 @@ const onToolSearch = (value: string) => {
     </div>
   </div>
   <Dialog :visible="editingToolConfig !== null" @update:visible="onCloseToolConfig" :modal="true" :draggable="false" :resizable="false" :closable="false" class="basic-dialog" maximizable :style="{ width: '50rem' }">
-    <AgentToolConfigEditor v-if="editingToolConfig" :toolConfig="editingToolConfig" @update="onSaveToolConfig" @close="onCloseToolConfig" :viewMode="viewMode" />
+    <AgentToolConfigEditor
+      v-if="editingToolConfig"
+      :toolConfig="editingToolConfig"
+      :exclude-agent-ids="editingExcludeAgentIds"
+      :parent-team-id="parentTeamId"
+      @update="onSaveToolConfig"
+      @close="onCloseToolConfig"
+      :viewMode="viewMode"
+    />
   </Dialog>
 </template>
 

@@ -4,7 +4,6 @@ import inspect
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from http import HTTPMethod
 from typing import Any, ClassVar, Optional, cast
 from urllib.parse import quote
@@ -12,14 +11,12 @@ from urllib.parse import quote
 import httpx
 from httpx import HTTPStatusError
 from langchain_core.tools import BaseTool, StructuredTool
-from pydantic import AnyHttpUrl
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from ..agents.domain import AgentToolConfig
 from ..core.assets import solve_asset_path
 from .auth import (
     AgentToolOauth,
-    OAuthMetadata,
     ToolAuthCallback,
     ToolAuthCallbackError,
     ToolAuthRepository,
@@ -28,17 +25,17 @@ from .auth import (
     ToolAuthTokenCallback,
     ToolAuthTokenRequest,
     ToolAuthTokenType,
-    ToolOAuthCallback,
-    ToolOAuthClientInfo,
-    ToolOAuthClientInfoRepository,
 )
-from .core import AgentTool, StatusUpdateCallbackHandler
+from .core import AgentTool, StatusUpdateCallbackHandler, UserFacingToolError
+from .oauth_tool import OAuthAgentTool
 
 
 class OpenApiTool(AgentTool, abc.ABC):
     _BODY_LOCATION = "body"
+    _QUERY_LOCATION = "query"
     _body_content_types = ("application/json",)
     _api_url: str = ""
+    _oauth_scopes_path: ClassVar[Optional[str]] = None
 
     async def build_langchain_tools(self) -> list[BaseTool]:
         api_spec = await self._load_api_spec()
@@ -46,7 +43,9 @@ class OpenApiTool(AgentTool, abc.ABC):
         return [
             self._build_langchain_tool(path, method, method_spec, schemas)
             for path, path_spec in api_spec.get("paths", {}).items()
-            for method, method_spec in path_spec.items() if self._should_include_operation(path, method)
+            for method, method_spec in path_spec.items()
+            if self._should_include_operation(path, method)
+            and self._has_configured_oauth_scopes(method_spec)
         ]
 
     async def _load_api_spec(self) -> dict:
@@ -61,6 +60,47 @@ class OpenApiTool(AgentTool, abc.ABC):
     def _should_include_operation(self, path: str, method: str) -> bool:
         return True
 
+    def _has_configured_oauth_scopes(self, method_spec: dict) -> bool:
+        if not self._oauth_scopes_path:
+            return True
+        required = self._values_at_path(method_spec, self._oauth_scopes_path)
+        return not required or any(set(scopes) <= self._configured_oauth_scopes() for scopes in required)
+
+    def _values_at_path(self, obj: Any, path: str) -> list[Any]:
+        values = [obj]
+        for key in path.split("."):
+            next_values = []
+            for value in values:
+                if isinstance(value, list):
+                    next_values.extend(item[key] for item in value if isinstance(item, dict) and key in item)
+                elif isinstance(value, dict) and key in value:
+                    next_values.append(value[key])
+            values = next_values
+        return values
+
+    def _configured_oauth_scopes(self) -> set[str]:
+        return set(self.config.get("scope", []))
+
+    def _synthetic_parameters(self, path: str, method: str) -> list[dict]:
+        return []
+
+    def _transform_response(self, path: str, method: str, response: Any, synthetic_params: dict) -> Any:
+        return response
+
+    async def _execute_operation(
+        self,
+        path: str,
+        method: str,
+        url: str,
+        query: Optional[dict],
+        header: Optional[dict],
+        body: Optional[Any],
+        body_content_type: Optional[str],
+        synthetic_params: dict,
+    ) -> Any:
+        response = await self._invoke_rest_api(method, url, query, header, body, body_content_type)
+        return self._transform_response(path, method, response, synthetic_params)
+
     def _operation_description(self, method: str, path: str, method_spec: dict) -> str:
         return (
             method_spec.get("description")
@@ -69,20 +109,28 @@ class OpenApiTool(AgentTool, abc.ABC):
         )
 
     def _build_langchain_tool(self, path: str, method: str, method_spec: dict, schemas: dict) -> BaseTool:
+        synthetic_param_defs = self._synthetic_parameters(path, method)
+        synthetic_names = {param["name"] for param in synthetic_param_defs}
+        if synthetic_param_defs:
+            method_spec = {**method_spec, "parameters": [*method_spec.get("parameters", []), *synthetic_param_defs]}
         body_content_type = self._find_body_content_type(method_spec)
 
         async def call_tool(**arguments: dict[str, Any]) -> str:
             param_type = self._find_unique_parameter_type(method_spec)
-            params = {param_type: arguments} if param_type else arguments
+            params = {param_type: arguments} if param_type else dict(arguments)
+            query = dict(params.get(self._QUERY_LOCATION) or {})
+            synthetic_params = {name: query.pop(name) for name in synthetic_names if name in query}
             path_params = {key: quote(str(value)) for key, value in params.get("path", {}).items()}
             final_path = path.format(**path_params) if path_params else path
-            return await self._invoke_rest_api(
+            return await self._execute_operation(
+                path,
                 method,
                 f"{self._api_url}{final_path}",
-                params.get("query"),
+                query or None,
                 params.get("header"),
                 params.get("body"),
                 body_content_type,
+                synthetic_params,
             )
 
         name = f"{self.name}-{method_spec['operationId']}".replace(" ", "")
@@ -103,31 +151,61 @@ class OpenApiTool(AgentTool, abc.ABC):
         headers: Optional[dict] = None,
         body: Optional[Any] = None,
         body_content_type: Optional[str] = None,
+        timeout: float = 10.0,
     ) -> Any:
+        response, _ = await self._invoke_rest_api_with_headers(
+            method, url, params, headers, body, body_content_type, timeout
+        )
+        return response
+
+    async def _invoke_rest_api_with_headers(
+        self,
+        method: str,
+        url: str,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        body: Optional[Any] = None,
+        body_content_type: Optional[str] = None,
+        timeout: float = 10.0,
+    ) -> tuple[Any, httpx.Headers]:
+        try:
+            return await self._invoke_rest_api_raising_http(method, url, params, headers, body, body_content_type, timeout)
+        except HTTPStatusError as e:
+            body_text = (e.response.text or "").strip()
+            raise UserFacingToolError(
+                f"HTTP {e.response.status_code} {e.response.reason_phrase}\n{body_text}"
+            ) from e
+
+    async def _invoke_rest_api_raising_http(
+        self,
+        method: str,
+        url: str,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        body: Optional[Any] = None,
+        body_content_type: Optional[str] = None,
+        timeout: float = 10.0,
+    ) -> tuple[Any, httpx.Headers]:
         headers = headers or {}
-        if body is not None:
+        content: Optional[bytes | str] = None
+        if isinstance(body, bytes):
+            headers["Content-Type"] = body_content_type or "application/octet-stream"
+            content = bytes(body)
+        elif body is not None:
             headers["Content-Type"] = body_content_type or "application/json"
-        async with httpx.AsyncClient(timeout=10.0) as client:
+            content = json.dumps(body)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.request(
                 method,
                 url,
                 params=params,
                 headers=await self._add_auth_headers(headers),
-                content=json.dumps(body) if body is not None else None,
+                content=content,
             )
-            try:
-                response.raise_for_status()
-            except HTTPStatusError as e:
-                if e.response.content:
-                    raise HTTPStatusError(
-                        f"{e}. Response body: {e.response.text}",
-                        request=e.request,
-                        response=e.response,
-                    ) from e
-                raise
+            response.raise_for_status()
             if response.status_code == 204:
-                return None
-            return response.json() if response.content else None
+                return None, response.headers
+            return (response.json() if response.content else None), response.headers
 
     @abc.abstractmethod
     async def _add_auth_headers(self, headers: dict) -> dict:
@@ -228,60 +306,11 @@ class OpenApiTool(AgentTool, abc.ABC):
             self._collect_and_refactor_schema_refs(sub_schema, schemas, refs)
 
 
-@dataclass(frozen=True)
-class OAuthToolConfig:
-    authority_base_url: str
-    authorize_path: str
-    token_path: str
-    scope: str
-
-    @property
-    def metadata(self) -> OAuthMetadata:
-        return OAuthMetadata(
-            issuer=AnyHttpUrl(self.authority_base_url),
-            authorization_endpoint=AnyHttpUrl(f"{self.authority_base_url}{self.authorize_path}"),
-            token_endpoint=AnyHttpUrl(f"{self.authority_base_url}{self.token_path}"),
-        )
-
-
-class OAuthOpenApiTool(OpenApiTool, abc.ABC):
-    _oauth: Optional[AgentToolOauth] = None
-    _client_secret_config_key: ClassVar[str] = "clientSecret"
-    _client_id_config_key: ClassVar[str] = "clientId"
-
-    @abc.abstractmethod
-    def _oauth_config(self) -> OAuthToolConfig:
-        raise NotImplementedError
+class OAuthOpenApiTool(OAuthAgentTool, OpenApiTool, abc.ABC):
 
     @abc.abstractmethod
     async def _resolve_api_url(self) -> str:
         raise NotImplementedError
-
-    async def _setup_tool(self, prev_config: Optional[AgentToolConfig]):
-        client_info_repo = ToolOAuthClientInfoRepository(self.db)
-        prev_client_info = await client_info_repo.find_by_ids(self.agent.id, self.id)
-        client_secret = self._get_secret(self._client_secret_config_key)
-        client_id = self.config[self._client_id_config_key]
-        if (
-            prev_config and prev_config.config != self.config
-            or prev_client_info and client_secret and prev_client_info.client_secret != client_secret
-        ):
-            if not client_secret and prev_client_info and prev_client_info.client_id == client_id:
-                client_secret = prev_client_info.client_secret
-            await self.teardown()
-        if client_secret:
-            await client_info_repo.save(
-                ToolOAuthClientInfo(
-                    agent_id=self.agent.id,
-                    tool_id=self.id,
-                    client_id=client_id,
-                    client_secret=client_secret,
-                    token_endpoint_auth_method="client_secret_post",
-                    scope=self._oauth_config().scope,
-                )
-            )
-        async with self.load():
-            pass
 
     @asynccontextmanager
     async def load(self) -> AsyncIterator["OAuthOpenApiTool"]:
@@ -295,38 +324,6 @@ class OAuthOpenApiTool(OpenApiTool, abc.ABC):
         if tokens:
             headers["Authorization"] = f"Bearer {tokens.access_token}"
         return headers
-
-    async def auth(self, auth_callback: ToolAuthCallback):
-        state = await ToolAuthRepository(self.db).find_state(
-            self.user_id, self.id, cast(ToolOAuthCallback, auth_callback).state
-        )
-        if not state:
-            raise ToolAuthCallbackError("OAuth state not found")
-        oauth = await self._load_oauth()
-        await oauth.callback(cast(ToolOAuthCallback, auth_callback), state)
-    
-
-    async def _load_oauth(self) -> AgentToolOauth:
-        oauth_config = self._oauth_config()
-        client_info = await ToolOAuthClientInfoRepository(self.db).find_by_ids(self.agent.id, self.id)
-        if not client_info or not client_info.scope:
-            raise ToolAuthRequestException(ToolAuthTokenRequest(tool_id=self.id, agent_id=self.agent.id))
-        return AgentToolOauth(
-            oauth_config.authority_base_url,
-            oauth_config.metadata,
-            cast(str, client_info.scope) + " offline_access",
-            self.agent.id,
-            self.id,
-            self.user_id,
-            self.db,
-        )
-
-    async def teardown(self):
-        await ToolAuthRepository(self.db).delete_token(self.user_id, self.agent.id, self.id)
-        await ToolOAuthClientInfoRepository(self.db).delete(self.agent.id, self.id)
-
-    async def clone(self, agent_id: int, cloned_agent_id: int, tool_id: str, user_id: int, db: AsyncSession) -> None:
-        pass
 
 
 class TokenOpenApiTool(OpenApiTool, abc.ABC):
@@ -374,7 +371,7 @@ class TokenOpenApiTool(OpenApiTool, abc.ABC):
         )
 
     async def _check_auth(self):
-        await self._invoke_rest_api(HTTPMethod.GET, f"{self._api_url.rstrip('/')}{self._auth_check_path}")
+        await self._invoke_rest_api_raising_http(HTTPMethod.GET, f"{self._api_url.rstrip('/')}{self._auth_check_path}")
 
     @asynccontextmanager
     async def load(self) -> AsyncIterator["TokenOpenApiTool"]:
@@ -383,8 +380,11 @@ class TokenOpenApiTool(OpenApiTool, abc.ABC):
             yield self
         except HTTPStatusError as e:
             if e.response.status_code == 401:
-                raise ToolAuthRequestException(ToolAuthTokenRequest(tool_id=self.id, agent_id=self.agent.id))
+                self._on_unauthorized(e)
             raise
+
+    def _on_unauthorized(self, e: HTTPStatusError) -> None:
+        raise ToolAuthRequestException(ToolAuthTokenRequest(tool_id=self.id, agent_id=self.agent.id)) from e
 
     async def auth(self, auth_callback: ToolAuthCallback):
         self._token = cast(ToolAuthTokenCallback, auth_callback).auth_token
@@ -412,4 +412,5 @@ class TokenOpenApiTool(OpenApiTool, abc.ABC):
         token = await ToolAuthRepository(self.db).find_token(self.user_id, self.agent.id, self.id)
         if not token:
             raise ToolAuthRequestException(ToolAuthTokenRequest(tool_id=self.id, agent_id=self.agent.id))
-        return cast(str, token.access_token).strip()
+        self._token = cast(str, token.access_token)
+        return self._token.strip()

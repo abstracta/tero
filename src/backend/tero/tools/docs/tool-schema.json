@@ -12,6 +12,11 @@
     "advancedFileProcessing": {
       "type": "boolean",
       "description": "Whether to use advanced file processing to process PDF files"
+    },
+    "responseGrounding": {
+      "type": "boolean",
+      "description": "Whether to verify answers against uploaded documents before returning them",
+      "default": true
     }
   },
   "required": ["files", "advancedFileProcessing"],

@@ -4,7 +4,10 @@ from typing import Optional, List, cast
 
 from sqlmodel import SQLModel, Field, Relationship
 
-from ..teams.domain import PublicTeamRole, Team, TeamRole, GLOBAL_TEAM_ID, TeamRoleStatus, Role
+from pydantic import Field as PydanticField, model_validator
+
+from ..core.domain import CamelCaseModel
+from ..teams.domain import PublicTeamRole, Team, TeamRole, GLOBAL_TEAM_ID, EDITOR_ROLES, OWNER_ROLES, TeamRoleStatus, Role
 
 
 class BaseUser(SQLModel, abc.ABC):
@@ -18,6 +21,7 @@ class User(BaseUser, table=True):
     monthly_hours: int = Field(default=160)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     deleted_at: Optional[datetime] = Field(default=None)
+    exclude_from_metrics: bool = Field(default=False)
     team_roles: List[TeamRole] = Relationship()
 
     def is_active(self) -> bool:
@@ -33,9 +37,25 @@ class User(BaseUser, table=True):
     def is_member_of(self, team_id: int) -> bool:
         return team_id == GLOBAL_TEAM_ID or any(cast(Team, tr.team).id == team_id and tr.status == TeamRoleStatus.ACCEPTED for tr in self.team_roles)
 
+    def is_editor_of(self, team_id: int) -> bool:
+        return any(
+            tr.role in EDITOR_ROLES
+            and tr.status == TeamRoleStatus.ACCEPTED
+            and tr.team_id == team_id
+            for tr in self.team_roles
+        )
+
     def is_global_owner(self) -> bool:
         return any(
-            tr.role == Role.TEAM_OWNER
+            tr.role in OWNER_ROLES
+            and tr.team_id == GLOBAL_TEAM_ID
+            and tr.status == TeamRoleStatus.ACCEPTED
+            for tr in self.team_roles
+        )
+
+    def is_budget_owner(self) -> bool:
+        return any(
+            tr.role == Role.BUDGET_OWNER
             and tr.team_id == GLOBAL_TEAM_ID
             and tr.status == TeamRoleStatus.ACCEPTED
             for tr in self.team_roles
@@ -47,6 +67,17 @@ class UserListItem(BaseUser):
     @staticmethod
     def from_user(user: Optional[User]) -> Optional['UserListItem']:
         return UserListItem.model_validate(user) if user else None
+
+
+class UserUpdate(CamelCaseModel):
+    exclude_from_metrics: Optional[bool] = None
+    monthly_usd_limit: Optional[int] = PydanticField(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def require_at_least_one_field(self):
+        if self.exclude_from_metrics is None and self.monthly_usd_limit is None:
+            raise ValueError("At least one field is required")
+        return self
 
 
 class UserProfile(SQLModel):

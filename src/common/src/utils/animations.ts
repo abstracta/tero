@@ -7,7 +7,8 @@ export enum AnimationEffect {
   QUICK_SLIDE_DOWN = 'quickSlideDown',
   SLIDE_UP = 'slideUp',
   QUICK_SLIDE_UP = 'quickSlideUp',
-  SLIDE_DOWN_SPRING = 'slideDownSpring'
+  SLIDE_DOWN_SPRING = 'slideDownSpring',
+  EXPAND_VERTICAL = 'expandVertical'
 }
 
 export const slideInLeft = {
@@ -190,6 +191,26 @@ export const slideDownSpring = {
   }
 };
 
+export const expandVertical = {
+  initial: { height: 0, opacity: 0 },
+  enter: {
+    height: 'auto',
+    opacity: 1,
+    transition: {
+      height: { type: 'spring', stiffness: 300, damping: 30 },
+      opacity: { duration: 250 }
+    }
+  },
+  leave: {
+    height: 0,
+    opacity: 0,
+    transition: {
+      height: { type: 'spring', stiffness: 300, damping: 30 },
+      opacity: { duration: 150 }
+    }
+  }
+};
+
 export const animations = {
   [AnimationEffect.SLIDE_IN_LEFT]: slideInLeft,
   [AnimationEffect.SLIDE_IN_RIGHT]: slideInRight,
@@ -199,5 +220,6 @@ export const animations = {
   [AnimationEffect.QUICK_SLIDE_DOWN]: quickSlideDown,
   [AnimationEffect.SLIDE_UP]: slideUp,
   [AnimationEffect.QUICK_SLIDE_UP]: quickSlideUp,
-  [AnimationEffect.SLIDE_DOWN_SPRING]: slideDownSpring
-}; 
+  [AnimationEffect.SLIDE_DOWN_SPRING]: slideDownSpring,
+  [AnimationEffect.EXPAND_VERTICAL]: expandVertical
+};

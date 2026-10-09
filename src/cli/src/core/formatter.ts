@@ -35,6 +35,7 @@ function createMarkdownRenderer(): MarkdownIt {
 
   md.use(MarkdownItPlantuml)
   md.use(useEcharts)
+  md.use(useBrTags)
   md.use(useTables)
   md.use(useListDecimal)
   md.use(useListBullet)
@@ -59,6 +60,18 @@ function useFencePlaceholder(md: MarkdownIt, lang: string, className: string, da
 
 function useEcharts(md: MarkdownIt): void {
   useFencePlaceholder(md, 'echarts', 'echarts-placeholder', 'data-options')
+}
+
+const BR_TAG = /^<br\s*\/?>/i
+
+function useBrTags(md: MarkdownIt): void {
+  md.inline.ruler.before('html_inline', 'br_tag', (state, silent) => {
+    const match = state.src.slice(state.pos).match(BR_TAG)
+    if (!match) return false
+    if (!silent) state.push('hardbreak', 'br', 0)
+    state.pos += match[0].length
+    return true
+  })
 }
 
 function useTables(md: MarkdownIt): void {
@@ -203,7 +216,7 @@ b, strong { font-weight: 500; }
   border-radius: 0.5rem;
 }
 .formatted-text { line-height: 1.375; }
-.formatted-text hr { display: none; }
+.formatted-text hr { border: none; border-top: 1px solid var(--border); margin: 0.75rem auto; width: 98%; }
 .formatted-text h1, .formatted-text h2 { font-size: 1.25rem; margin: 0.625rem 0; }
 .formatted-text h3, .formatted-text h4 { margin: 0.125rem 0; font-weight: normal; }
 .formatted-text ul, .formatted-text ol { margin-bottom: 0.625rem; }

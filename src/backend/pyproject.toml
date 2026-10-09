@@ -32,6 +32,7 @@ dependencies = [
     "azure-ai-documentintelligence (>=1.0.2,<2.0.0)",
     "pyodbc (>=5.0.0,<6.0.0)",
     "tabulate (>=0.9.0,<0.10.0)",
+    "python-docx (>=1.1.0,<2.0.0)",
     "openpyxl (>=3.1.5,<4.0.0)",
     "pypdf (>=6.3.0,<7.0.0)",
     "langchain-community (>=0.4.1,<0.5.0)",
@@ -52,8 +53,8 @@ dependencies = [
     "transformers (>=4.57.1,<5.0.0)",
     "python-slugify (>=8.0.4,<9.0.0)",
     "mcp (>=1.22.0,<1.26.0)",
-    "pypdfium2 (>=5.0.0,<6.0.0)",
-    "deepagents (>=0.5.3,<0.6.0)",
+    "pypdfium2 (>=5.10.1,<6.0.0)",
+    "deepagents (>=0.7.16,<0.8.0)",
     "langgraph-checkpoint-postgres (>=3.0.5,<4.0.0)",
     "bcrypt (>=5.0.0,<6.0.0)"
 ]
@@ -73,3 +74,13 @@ freezegun = "^1.5.1"
 testcontainers = {extras = ["postgres"], version = "^4.13.3"}
 pyright = "^1.1.400"
 alembic-postgresql-enum = "^1.8.0"
+pytest-timeout = "^2.4.0"
+pytest-rerunfailures = "^16.7"
+
+[tool.pyright]
+exclude = [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.*",
+    "var/*",
+]

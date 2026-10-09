@@ -1,4 +1,4 @@
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 from sqlmodel import col
 
@@ -12,6 +12,7 @@ from tero.agents.prompts.domain import AgentPromptPublic, AgentPrompt
 from tero.files.domain import FileMetadata, FileStatus, FileProcessor
 from tero.teams.domain import Team, Role
 from tero.tools.docs import DOCS_TOOL_ID
+from tero.tools.subagent import SUBAGENT_TOOL_ID
 from tero.users.domain import UserListItem
 
 
@@ -19,6 +20,15 @@ from tero.users.domain import UserListItem
 async def test_find_all_user_agents(client: AsyncClient, agents: List[AgentListItem]):
     resp = await _find_user_agents(client)
     assert_response(resp, _clear_active_users([agents[1], agents[0]]))
+
+
+@freeze_time(CURRENT_TIME)
+async def test_find_user_agents_pages(client: AsyncClient, agents: List[AgentListItem]):
+    first_page = await _find_user_agents(client, {"limit": 1, "offset": 0})
+    second_page = await _find_user_agents(client, {"limit": 1, "offset": 1})
+
+    assert_response(first_page, _clear_active_users([agents[1]]))
+    assert_response(second_page, _clear_active_users([agents[0]]))
 
 
 async def _find_user_agents(client: AsyncClient, params: Optional[dict[str, Any]] = None) -> Response:
@@ -41,6 +51,35 @@ def _clear_active_users(agents: List[AgentListItem]) -> List[BaseModel]:
 async def test_find_user_agents_by_text(client: AsyncClient, agents: List[AgentListItem]):
     resp = await _find_user_agents(client, {"text": "first"})
     assert_response(resp, _clear_active_users([agents[0]]))
+
+
+@freeze_time(CURRENT_TIME)
+async def test_find_user_agents_filters_before_paging(client: AsyncClient, agents: List[AgentListItem]):
+    resp = await _find_user_agents(client, {"text": "first", "limit": 1})
+    assert_response(resp, _clear_active_users([agents[0]]))
+    resp = await _find_user_agents(client, {"text": "first", "limit": 1, "offset": 1})
+    assert_response(resp, [])
+
+
+async def test_find_user_agents_treats_sql_wildcards_as_text(client: AsyncClient):
+    assert_response(await _find_user_agents(client, {"text": "%"}), [])
+    assert_response(await _find_user_agents(client, {"text": "_"}), [])
+
+
+async def test_find_user_agents_searches_historical_name(client: AsyncClient, override_user: Callable[[int], None]):
+    update = AgentUpdate(name="Moved Agent", team_id=4)
+    moved = await client.put(AGENT_PATH.format(agent_id=2), json=update.model_dump(mode="json", by_alias=True))
+    moved.raise_for_status()
+
+    override_user(OTHER_USER_ID)
+    first_page = await _find_user_agents(client, {"text": "Agent 2", "limit": 1})
+    first_page.raise_for_status()
+    assert [(agent["id"], agent["name"], agent["readOnly"]) for agent in first_page.json()] == [(2, "Agent 2", True)]
+
+    second_page = await _find_user_agents(client, {"text": "Agent 2", "limit": 1, "offset": 1})
+    assert_response(second_page, [])
+    current_name = await _find_user_agents(client, {"text": "Moved Agent"})
+    assert_response(current_name, [])
 
 
 @freeze_time(CURRENT_TIME)
@@ -167,6 +206,52 @@ async def test_update_agent_type(client: AsyncClient):
     assert resp.json()["agentType"] == AgentType.REACT_AGENT.value
 
 
+async def test_update_agent_memory_enabled(client: AsyncClient):
+    resp = await _update_agent(AGENT_ID, AgentUpdate(memory_enabled=False), client)
+    resp.raise_for_status()
+    assert resp.json()["memoryEnabled"] is False
+
+    resp = await _update_agent(AGENT_ID, AgentUpdate(memory_enabled=True), client)
+    resp.raise_for_status()
+    assert resp.json()["memoryEnabled"] is True
+
+
+async def test_update_agent_type_to_basic_removes_subagent_configs(client: AsyncClient):
+    await _update_agent(AGENT_ID, AgentUpdate(agent_type=AgentType.DEEP_AGENT), client)
+    await configure_agent_tool(AGENT_ID, f"{SUBAGENT_TOOL_ID}-*", {"agentId": 2}, client)
+    await _configure_docs_tool(client)
+
+    resp = await _update_agent(AGENT_ID, AgentUpdate(agent_type=AgentType.REACT_AGENT), client)
+    resp.raise_for_status()
+    assert resp.json()["agentType"] == AgentType.REACT_AGENT.value
+    resp = await _find_agent_tools(AGENT_ID, client)
+    resp.raise_for_status()
+    assert {c["toolId"] for c in resp.json()} == {DOCS_TOOL_ID}
+
+    resp = await _update_agent(AGENT_ID, AgentUpdate(agent_type=AgentType.DEEP_AGENT), client)
+    resp.raise_for_status()
+    assert resp.json()["agentType"] == AgentType.DEEP_AGENT.value
+    resp = await _find_agent_tools(AGENT_ID, client)
+    resp.raise_for_status()
+    assert {c["toolId"] for c in resp.json()} == {DOCS_TOOL_ID}
+
+
+async def test_update_agent_team_with_unshared_subagent(client: AsyncClient):
+    await _update_agent(AGENT_ID, AgentUpdate(agent_type=AgentType.DEEP_AGENT), client)
+    await configure_agent_tool(AGENT_ID, f"{SUBAGENT_TOOL_ID}-*", {"agentId": NON_EDITABLE_AGENT_ID}, client)
+    resp = await _update_agent(AGENT_ID, AgentUpdate(team_id=GLOBAL_TEAM_ID), client)
+    assert resp.status_code == status.HTTP_400_BAD_REQUEST
+    assert resp.json()["detail"] == "Cannot share agent because these subagents are not shared with the same team: Agent 3"
+
+
+async def test_update_agent_team_with_shared_subagent(client: AsyncClient):
+    await _update_agent(AGENT_ID, AgentUpdate(agent_type=AgentType.DEEP_AGENT), client)
+    await configure_agent_tool(AGENT_ID, f"{SUBAGENT_TOOL_ID}-*", {"agentId": NON_EDITABLE_AGENT_ID}, client)
+    resp = await _update_agent(AGENT_ID, AgentUpdate(team_id=4), client)
+    resp.raise_for_status()
+    assert resp.json()["team"]["id"] == 4
+
+
 async def test_update_non_editable_agent(client: AsyncClient):
     resp = await _update_agent(NON_EDITABLE_AGENT_ID, AgentUpdate(name="test"), client)
     assert resp.status_code == status.HTTP_404_NOT_FOUND
@@ -209,6 +294,12 @@ async def test_configure_non_editable_agent_tool(client: AsyncClient):
     assert resp.status_code == status.HTTP_404_NOT_FOUND
 
 
+async def test_configure_owner_configured_tool_as_non_owner(client: AsyncClient):
+    resp = await try_configure_agent_tool(5, "notion", {"token": "secret"}, client)
+    assert resp.status_code == status.HTTP_403_FORBIDDEN
+    assert resp.json()["detail"] == "Only the agent owner can configure this tool"
+
+
 async def test_configure_invalid_tool(client: AsyncClient):
     resp = await try_configure_agent_tool(AGENT_ID, "invalid", {}, client)
     assert resp.status_code == status.HTTP_400_BAD_REQUEST
@@ -217,6 +308,55 @@ async def test_configure_invalid_tool(client: AsyncClient):
 async def test_configure_tool_with_invalid_config(client: AsyncClient):
     resp = await try_configure_agent_tool(AGENT_ID, DOCS_TOOL_ID, {"test": "val"}, client)
     assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+
+async def test_configure_multiple_subagent_tools(client: AsyncClient):
+    await _update_agent(AGENT_ID, AgentUpdate(agent_type=AgentType.DEEP_AGENT), client)
+    await configure_agent_tool(AGENT_ID, f"{SUBAGENT_TOOL_ID}-*", {"agentId": 2}, client)
+    await configure_agent_tool(AGENT_ID, f"{SUBAGENT_TOOL_ID}-*", {"agentId": 5}, client)
+    resp = await _find_agent_tools(AGENT_ID, client)
+    resp.raise_for_status()
+    assert {(c["toolId"], c["config"]["agentId"]) for c in resp.json()} == {("subagent-2", 2), ("subagent-5", 5)}
+
+
+async def test_configure_subagent_tool_missing_agent_id(client: AsyncClient):
+    await _update_agent(AGENT_ID, AgentUpdate(agent_type=AgentType.DEEP_AGENT), client)
+    resp = await try_configure_agent_tool(AGENT_ID, f"{SUBAGENT_TOOL_ID}-*", {}, client)
+    assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+
+async def test_configure_subagent_tool_on_basic_agent(client: AsyncClient):
+    resp = await try_configure_agent_tool(AGENT_ID, f"{SUBAGENT_TOOL_ID}-*", {"agentId": 2}, client)
+    assert resp.status_code == status.HTTP_400_BAD_REQUEST
+    assert resp.json()["detail"] == "Invalid tool configuration"
+
+
+async def test_configure_subagent_tool_self_reference(client: AsyncClient):
+    await _update_agent(AGENT_ID, AgentUpdate(agent_type=AgentType.DEEP_AGENT), client)
+    resp = await try_configure_agent_tool(AGENT_ID, f"{SUBAGENT_TOOL_ID}-*", {"agentId": AGENT_ID}, client)
+    assert resp.status_code == status.HTTP_400_BAD_REQUEST
+    assert resp.json()["detail"] == "Invalid tool configuration"
+
+
+async def test_configure_subagent_tool_not_found(client: AsyncClient):
+    await _update_agent(AGENT_ID, AgentUpdate(agent_type=AgentType.DEEP_AGENT), client)
+    resp = await try_configure_agent_tool(AGENT_ID, f"{SUBAGENT_TOOL_ID}-*", {"agentId": 999}, client)
+    assert resp.status_code == status.HTTP_400_BAD_REQUEST
+    assert resp.json()["detail"] == "Invalid tool configuration"
+
+
+async def test_configure_subagent_tool_not_visible(client: AsyncClient):
+    await _update_agent(AGENT_ID, AgentUpdate(agent_type=AgentType.DEEP_AGENT), client)
+    resp = await try_configure_agent_tool(AGENT_ID, f"{SUBAGENT_TOOL_ID}-*", {"agentId": NON_VISIBLE_AGENT_ID}, client)
+    assert resp.status_code == status.HTTP_400_BAD_REQUEST
+    assert resp.json()["detail"] == "Invalid tool configuration"
+
+
+async def test_configure_subagent_tool_requires_matching_team(client: AsyncClient):
+    await _update_agent(AGENT_ID, AgentUpdate(agent_type=AgentType.DEEP_AGENT, team_id=2), client)
+    resp = await try_configure_agent_tool(AGENT_ID, f"{SUBAGENT_TOOL_ID}-*", {"agentId": NON_EDITABLE_AGENT_ID}, client)
+    assert resp.status_code == status.HTTP_400_BAD_REQUEST
+    assert resp.json()["detail"] == "Invalid tool configuration"
 
 
 async def test_get_non_visible_agent_tools(client: AsyncClient):
@@ -242,6 +382,15 @@ async def _remove_agent_tool_config(agent_id: int, tool_id: str, client: AsyncCl
     return await client.delete(AGENT_TOOL_PATH.format(agent_id=agent_id, tool_id=tool_id))
 
 
+async def test_remove_subagent_tool_config(client: AsyncClient):
+    await _update_agent(AGENT_ID, AgentUpdate(agent_type=AgentType.DEEP_AGENT), client)
+    await configure_agent_tool(AGENT_ID, f"{SUBAGENT_TOOL_ID}-*", {"agentId": 2}, client)
+    resp = await _remove_agent_tool_config(AGENT_ID, "subagent-2", client)
+    resp.raise_for_status()
+    resp = await _find_agent_tools(AGENT_ID, client)
+    assert resp.json() == []
+
+
 async def test_remove_non_editable_agent_tool_config(client: AsyncClient):
     resp = await _remove_agent_tool_config(NON_EDITABLE_AGENT_ID, DOCS_TOOL_ID, client)
     assert resp.status_code == status.HTTP_404_NOT_FOUND
@@ -254,6 +403,7 @@ async def test_remove_unconfigured_tool(client: AsyncClient):
 
 @freeze_time(CURRENT_TIME)
 @pytest.mark.usefixtures("stub_docs_tool_generate_description")
+@docs_ingestion_timeout
 async def test_upload_agent_tool_file(client: AsyncClient):
     await _configure_docs_tool(client)
     filename = "test.txt"
@@ -318,6 +468,7 @@ async def test_find_non_existent_file_content(client: AsyncClient):
 
 @freeze_time(CURRENT_TIME)
 @pytest.mark.usefixtures("stub_docs_tool_generate_description")
+@docs_ingestion_timeout
 async def test_update_agent_tool_file(client: AsyncClient):
     await _configure_docs_tool(client)
     filename = "test.txt"
@@ -356,6 +507,7 @@ async def test_update_non_existent_file(client: AsyncClient):
 
 
 @pytest.mark.usefixtures("stub_docs_tool_generate_description")
+@docs_ingestion_timeout
 async def test_delete_agent_tool_file(client: AsyncClient):
     await _configure_docs_tool(client)
     file_id = await upload_agent_tool_config_file(AGENT_ID, DOCS_TOOL_ID, client)
@@ -415,6 +567,7 @@ async def _reprocess_agent_tool_file(client: AsyncClient, file_processor: FilePr
 
 @freeze_time(CURRENT_TIME)
 @pytest.mark.usefixtures("stub_docs_tool_generate_description")
+@docs_ingestion_timeout
 async def test_reprocess_agent_tool_file_basic(client: AsyncClient):
     await _reprocess_agent_tool_file(client, FileProcessor.BASIC)
 
@@ -422,6 +575,7 @@ async def test_reprocess_agent_tool_file_basic(client: AsyncClient):
 @pytest.mark.skipif(not env.azure_doc_intelligence_key, reason="Azure Doc Intelligence not configured")
 @freeze_time(CURRENT_TIME)
 @pytest.mark.usefixtures("stub_docs_tool_generate_description")
+@docs_ingestion_timeout
 async def test_reprocess_agent_tool_file_enhanced(client: AsyncClient):
     await _reprocess_agent_tool_file(client, FileProcessor.ENHANCED)
 
@@ -511,5 +665,6 @@ async def _find_agent_prompts(agent_id: int, client: AsyncClient) -> Response:
 
 async def test_find_default_agent(client: AsyncClient, teams: List[Team]):
     resp = await client.get(AGENTS_PATH + "/default")
-    assert_response(resp, PublicAgent(id=6, name="GPT-5 Nano", description="This is the default agent", last_update=PAST_TIME, team=teams[0], user_id=None,
-              model_id="gpt-5-nano", system_prompt="You are a helpful AI agent.", temperature=LlmTemperature.NEUTRAL, reasoning_effort=ReasoningEffort.LOW, recursion_limit=20, icon=None, can_edit=True, user=None))
+    assert_response(resp, PublicAgent(id=6, name="GPT-6 Luna", description="This is the default agent", last_update=PAST_TIME, team=teams[0], user_id=None,
+              model_id="gpt-6-luna", system_prompt="You are a helpful AI agent.", temperature=LlmTemperature.NEUTRAL, reasoning_effort=ReasoningEffort.LOW, recursion_limit=20, icon=None, can_edit=True, user=None,
+              agent_type=AgentType.DEEP_AGENT, memory_enabled=True))

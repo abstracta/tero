@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "repositoryUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://",
+      "description": "Git repository HTTPS clone URL"
+    },
+    "accessToken": {
+      "type": "string",
+      "writeOnly": true,
+      "description": "Personal access token for private repositories"
+    },
+    "ref": {
+      "type": "string",
+      "description": "Branch or tag to checkout (uses default branch if empty)"
+    }
+  },
+  "required": ["repositoryUrl"]
+}

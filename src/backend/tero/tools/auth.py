@@ -4,7 +4,7 @@ from enum import Enum
 import logging
 import secrets
 import time
-from typing import Any, Literal, Optional, cast
+from typing import Any, Callable, Literal, Optional, cast
 from urllib.parse import urlencode, urljoin
 
 from fastapi import HTTPException, status
@@ -84,6 +84,10 @@ class ToolAuthRequest(CamelCaseModel):
 class ToolAuthRequestException(Exception):
     def __init__(self, request: ToolAuthRequest):
         self.request = request
+
+
+class OwnerConfiguredToolAuthError(Exception):
+    pass
 
 
 class ToolOAuthRequest(ToolAuthRequest):
@@ -205,13 +209,24 @@ class ToolOAuthClientInfoRepository:
 
 class AgentToolOAuthStorage(TokenStorage):
 
-    def __init__(self, user_id: int, agent_id: int, tool_id: str, db: AsyncSession, oauth: "AgentToolOauth"):
+    def __init__(
+        self,
+        user_id: int,
+        agent_id: int,
+        tool_id: str,
+        db: AsyncSession,
+        oauth: "AgentToolOauth",
+        redirect_uri: str,
+        client_info_provider: Optional[Callable[[], OAuthClientInformationFull]] = None,
+    ):
         self._user_id = user_id
         self._agent_id = agent_id
         self._tool_id = tool_id
+        self._redirect_uri = redirect_uri
         self._oauth_repo = ToolAuthRepository(db)
         self._client_info_repo = ToolOAuthClientInfoRepository(db)
         self._oauth = oauth
+        self._client_info_provider = client_info_provider
 
     async def get_tokens(self) -> Optional[OAuthToken]:
         ret = await self._oauth_repo.find_token(self._user_id, self._agent_id, self._tool_id)
@@ -239,14 +254,18 @@ class AgentToolOAuthStorage(TokenStorage):
         ))
 
     async def get_client_info(self) -> Optional[OAuthClientInformationFull]:
+        if self._client_info_provider:
+            return self._client_info_provider()
         ret = await self._client_info_repo.find_by_ids(self._agent_id, self._tool_id)
         return OAuthClientInformationFull(
             client_id=ret.client_id,
             client_secret=ret.client_secret,
             token_endpoint_auth_method=cast(Literal["none", "client_secret_post", "client_secret_basic", "private_key_jwt"], ret.token_endpoint_auth_method),
-            redirect_uris=[AnyHttpUrl(_build_redirect_uri(self._tool_id))]) if ret else None
+            redirect_uris=[AnyHttpUrl(self._redirect_uri)]) if ret else None
 
     async def set_client_info(self, client_info: OAuthClientInformationFull):
+        if self._client_info_provider:
+            return
         info = ToolOAuthClientInfo(
             agent_id=self._agent_id,
             tool_id=self._tool_id,
@@ -271,23 +290,49 @@ class AgentToolOauth(OAuthClientProvider):
 
     _DUMMY_URL = AnyHttpUrl("http://localhost")
 
-    def __init__(self, server_url: str, metadata: Optional[OAuthMetadata], scope: Optional[str], agent_id: int, tool_id: str, user_id: int, db: AsyncSession):
+    def __init__(
+        self,
+        server_url: str,
+        metadata: Optional[OAuthMetadata],
+        scope: Optional[str],
+        agent_id: int,
+        tool_id: str,
+        user_id: int,
+        db: AsyncSession,
+        # tools supporting several configs per agent (eg: sql) share a single redirect uri across all of
+        # them, so a single redirect uri needs to be registered in the identity provider
+        redirect_uri: Optional[str] = None,
+        client_info_provider: Optional[Callable[[], OAuthClientInformationFull]] = None,
+    ):
         self._agent_id = agent_id
         self._tool_id = tool_id
         self._user_id = user_id
         self._oauth_repo = ToolAuthRepository(db)
         self._http_client = httpx.AsyncClient()
-        client_metadata = OAuthClientMetadata(redirect_uris=[AnyHttpUrl(_build_redirect_uri(tool_id))], scope=scope)
+        redirect_uri = redirect_uri or _build_redirect_uri(tool_id)
+        client_metadata = OAuthClientMetadata(redirect_uris=[AnyHttpUrl(redirect_uri)], scope=scope)
         super().__init__(
             server_url,
             client_metadata,
-            AgentToolOAuthStorage(user_id, agent_id, tool_id, db, self),
+            AgentToolOAuthStorage(user_id, agent_id, tool_id, db, self, redirect_uri, client_info_provider),
             redirect_handler=self._redirect_handler,
             callback_handler=self._callback_handler
         )
         self.context.oauth_metadata = metadata
         self.state = ""
         self.code_verifier = ""
+
+        # MCP SDK leaves client_id in the body under client_secret_basic; strict servers reject that.
+        # https://github.com/modelcontextprotocol/python-sdk/issues/3138
+        original_prepare_token_auth = self.context.prepare_token_auth
+
+        def prepare_token_auth(data: dict[str, str], headers: dict[str, str] | None = None) -> tuple[dict[str, str], dict[str, str]]:
+            data, headers = original_prepare_token_auth(data, headers)
+            if headers.get("Authorization", "").startswith("Basic "):
+                data = {k: v for k, v in data.items() if k not in ("client_id", "client_secret")}
+            return data, headers
+
+        self.context.prepare_token_auth = prepare_token_auth
 
     @property
     def server_url(self) -> str:
@@ -333,8 +378,9 @@ class AgentToolOauth(OAuthClientProvider):
             refresh_request = await self._refresh_token()
             refresh_response = await self._http_request(refresh_request)
 
-            if not await self._handle_refresh_response(refresh_response):
-                self._initialized = False
+            if await self._handle_refresh_response(refresh_response):
+                return
+            self._initialized = False
 
         await self._discover_oauth_metadata()
 

@@ -7,12 +7,14 @@ from langchain_core.messages.ai import UsageMetadata
 from pydantic import computed_field
 from sqlmodel import Field, SQLModel
 
-from ..ai_models.domain import LlmModel
+from ..ai_models.domain import LlmModel, LlmModelVendor
 from ..core.domain import CamelCaseModel
 from ..teams.domain import Team
 
 
 PRIVATE_AGENT_ID = -1
+PROMPT_CACHED_TOKEN_DISCOUNT = 10
+PROMPT_CACHE_CREATION_MULTIPLIER = 1.25
 
 
 class UsageType(Enum):
@@ -57,29 +59,61 @@ class MessageUsage():
         self.user_id = user_id
         self.agent_id = agent_id
         self.model_id = model_id
-        self.prompt_usage =  Usage(
-                message_id=self.message_id,
-                user_id=self.user_id,
-                agent_id=self.agent_id,
-                model_id=self.model_id,
-                type=UsageType.PROMPT_TOKENS
-            )
-        self.completion_usage = Usage(
-                message_id=self.message_id,
-                user_id=self.user_id,
-                agent_id=self.agent_id,
-                model_id=self.model_id,
-                type=UsageType.COMPLETION_TOKENS
-            )
+        self.model_usages: dict[tuple[int, str], tuple[Usage, Usage]] = {}
         self.tools_usage = {}
 
-   
-    def increment_with_metadata(self, metadata: Optional[UsageMetadata], model: LlmModel):
+    def _usages_for(self, agent_id: int, model_id: str) -> tuple[Usage, Usage]:
+        key = (agent_id, model_id)
+        if key not in self.model_usages:
+            self.model_usages[key] = (
+                Usage(
+                    message_id=self.message_id,
+                    user_id=self.user_id,
+                    agent_id=agent_id,
+                    model_id=model_id,
+                    type=UsageType.PROMPT_TOKENS,
+                ),
+                Usage(
+                    message_id=self.message_id,
+                    user_id=self.user_id,
+                    agent_id=agent_id,
+                    model_id=model_id,
+                    type=UsageType.COMPLETION_TOKENS,
+                ),
+            )
+        return self.model_usages[key]
+
+    def increment_with_metadata(
+        self,
+        metadata: Optional[UsageMetadata],
+        model: LlmModel,
+        agent_id: Optional[int] = None,
+    ):
         if not metadata:
             return
-        self.prompt_usage.increment(metadata["input_tokens"], model.prompt_1k_token_usd)
-        self.completion_usage.increment(metadata["output_tokens"], model.completion_1k_token_usd)
-    
+        prompt_usage, completion_usage = self._usages_for(
+            agent_id if agent_id is not None else self.agent_id,
+            model.id,
+        )
+        details = metadata.get("input_token_details") or {}
+        cache_read = details.get("cache_read") or 0
+        base = model.prompt_1k_token_usd
+
+        if model.model_vendor == LlmModelVendor.OPENAI:
+            prompt_usage.increment(metadata["input_tokens"] - cache_read, base)
+            if cache_read:
+                prompt_usage.increment(cache_read, base / PROMPT_CACHED_TOKEN_DISCOUNT)
+        elif model.model_vendor in (LlmModelVendor.ANTHROPIC, LlmModelVendor.AMAZON):
+            cache_creation = details.get("ephemeral_5m_input_tokens") or details.get("cache_creation") or 0
+            prompt_usage.increment(metadata["input_tokens"] - cache_read - cache_creation, base)
+            if cache_read:
+                prompt_usage.increment(cache_read, base / PROMPT_CACHED_TOKEN_DISCOUNT)
+            if cache_creation:
+                prompt_usage.increment(cache_creation, base * PROMPT_CACHE_CREATION_MULTIPLIER)
+        else:
+            prompt_usage.increment(metadata["input_tokens"], base)
+        completion_usage.increment(metadata["output_tokens"], model.completion_1k_token_usd)
+
     def increment_tool_usage(self, tool_usage: Optional[ToolUsage]):
         if not tool_usage:
             return
@@ -93,10 +127,9 @@ class MessageUsage():
             )
         self.tools_usage[tool_usage.type].increment(tool_usage.quantity, tool_usage.cost_per_1k_units)
 
-    
     def usages(self) -> List[Usage]:
-        return [self.prompt_usage, self.completion_usage] + list(self.tools_usage.values())
-    
+        return [u for pair in self.model_usages.values() for u in pair] + list(self.tools_usage.values())
+
     @property
     def usd_cost(self) -> float:
         return sum(usage.usd_cost for usage in self.usages())

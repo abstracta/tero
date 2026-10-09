@@ -7,16 +7,21 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
 from openai import AsyncAzureOpenAI, RateLimitError
 from pydantic import SecretStr
-import tiktoken
 
 from ..core.env import env
 from .domain import AiModelProvider
-from .openai_provider import get_encoding_model, count_tokens, get_num_tokens_from_messages_sanitizing_unsupported_blocks
+from .openai_provider import (
+    _StrictToolsMixin,
+    count_tokens,
+    get_num_tokens_from_messages_sanitizing_unsupported_blocks,
+    openai_resilience_kwargs,
+    use_responses_api_for_model,
+)
 
 
 class AzureProvider(AiModelProvider):
 
-    def _build_chat_model(self, model: str, temperature: Optional[float], reasoning_effort: Optional[str], streaming: bool) -> BaseChatModel:
+    def _build_chat_model(self, model: str, temperature: Optional[float], reasoning_effort: Optional[str], streaming: bool, request_timeout: Optional[float] = None, max_retries: Optional[int] = None) -> BaseChatModel:
         deployment = env.azure_model_deployments[model]
         return ReasoningTokenCountingAzureChatOpenAI(
             azure_endpoint=env.azure_endpoints[deployment.endpoint_index],
@@ -28,8 +33,8 @@ class AzureProvider(AiModelProvider):
             reasoning_effort=reasoning_effort,
             streaming=streaming,
             stream_usage=True,
-            # use responses api for codex models because they are not supported by completion endpoint
-            use_responses_api="-codex" in model)
+            use_responses_api=use_responses_api_for_model(model),
+            **openai_resilience_kwargs(request_timeout, max_retries))
 
     def supports_model(self, model: str) -> bool:
         return model in env.azure_model_deployments
@@ -50,29 +55,33 @@ class AzureProvider(AiModelProvider):
         )
         return response.text
 
-    def build_embedding(self, model: str) -> AzureOpenAIEmbeddings:
+    def build_embedding(self, model: str, request_timeout: Optional[float] = None, max_retries: Optional[int] = None) -> AzureOpenAIEmbeddings:
         deployment = env.azure_model_deployments[model]
         return AzureOpenAIEmbeddings(
             azure_endpoint=env.azure_endpoints[deployment.endpoint_index],
             azure_deployment=deployment.deployment_name,
             api_version=env.azure_api_version,
-            api_key=env.azure_api_keys[deployment.endpoint_index])
+            api_key=env.azure_api_keys[deployment.endpoint_index],
+            **openai_resilience_kwargs(request_timeout, max_retries))
 
     def count_tokens(self, txt: str, model: str) -> int:
         return count_tokens(txt, model)
 
 
-class ReasoningTokenCountingAzureChatOpenAI(AzureChatOpenAI):
+class ReasoningTokenCountingAzureChatOpenAI(_StrictToolsMixin, AzureChatOpenAI):
 
-    # we override this method which is the one used by get_num_tokens_from_messages to count the tokens
-    def _get_encoding_model(self) -> tuple[str, tiktoken.Encoding]:
-        return get_encoding_model(self.model_name, lambda: AzureChatOpenAI._get_encoding_model(self))
-
-    def get_num_tokens_from_messages(self, messages: Sequence[BaseMessage], tools: Optional[Sequence[Any]] = None) -> int:
+    def get_num_tokens_from_messages(
+        self,
+        messages: Sequence[BaseMessage],
+        tools: Optional[Sequence[Any]] = None,
+        *,
+        allow_fetching_images: bool = True,
+    ) -> int:
         return get_num_tokens_from_messages_sanitizing_unsupported_blocks(
             token_counter=super().get_num_tokens_from_messages,
             messages=messages,
             tools=tools,
+            allow_fetching_images=allow_fetching_images,
         )
 
 

@@ -11,7 +11,7 @@ The agent can help with:
 
 #### Authentication
 
-This tool uses a personal API token and connects to the PractiTest MCP server.
+This tool connects to the PractiTest MCP server.
 
 ::: info Availability
 The PractiTest MCP server is available for Corporate accounts.
@@ -19,7 +19,5 @@ The PractiTest MCP server is available for Corporate accounts.
 
 **Steps to set up:**
 
-1. In PractiTest, go to your account settings and generate a personal API token.
-2. In the tool configuration, enter:
+1. In the tool configuration, enter:
    - **Server URL**: your PractiTest MCP server URL
-   - **Token**: the personal API token

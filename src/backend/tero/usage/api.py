@@ -10,7 +10,7 @@ from ..core.auth import get_current_user
 from ..core.domain import CamelCaseModel
 from ..core.repos import get_db
 from ..external_agents.repos import ExternalAgentRepository
-from ..teams.domain import Role, TeamRoleStatus, MY_TEAM_ID, GLOBAL_TEAM_ID
+from ..teams.domain import OWNER_ROLES, TeamRoleStatus, MY_TEAM_ID, GLOBAL_TEAM_ID
 from ..teams.repos import TeamRepository
 from ..usage.domain import PRIVATE_AGENT_ID
 from ..users.domain import User
@@ -146,7 +146,7 @@ def _verify_owner_role(user: User, team_id: int) -> None:
         return
     if not any(
         tr.status == TeamRoleStatus.ACCEPTED
-        and tr.role == Role.TEAM_OWNER
+        and tr.role in OWNER_ROLES
         and (tr.team_id == team_id or tr.team_id == GLOBAL_TEAM_ID)
         for tr in user.team_roles
     ):

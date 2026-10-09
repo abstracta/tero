@@ -4,7 +4,6 @@ import { useI18n } from 'vue-i18n';
 import { ApiService, type Thread, type Agent } from '@/services/api';
 import { useErrorHandler } from '@/composables/useErrorHandler';
 import { useDebounce } from '@/composables/useDebounce';
-import { AnimationEffect } from '../../../../common/src/utils/animations';
 
 const { t } = useI18n();
 const api = new ApiService();
@@ -25,11 +24,21 @@ const props = defineProps<{
   searchQuery: string
 }>();
 
+const focusSearch = () => {
+  nextTick(() => {
+    searchInput.value?.focus();
+  });
+}
+
 onMounted(() => {
   if (props.showingSearchInput) {
-    nextTick(() => {
-      searchInput.value?.focus();
-    });
+    focusSearch();
+  }
+});
+
+watch(() => props.showingSearchInput, (showing) => {
+  if (showing) {
+    focusSearch();
   }
 });
 
@@ -99,9 +108,7 @@ defineExpose({
 </script>
 
 <template>
-    <Animate
-      class="w-full px-1 my-2"
-      :effect="AnimationEffect.SLIDE_DOWN">
+    <div class="w-full px-1 my-2">
       <div class="relative">
         <InteractiveInput
           ref="searchInput"
@@ -116,7 +123,7 @@ defineExpose({
           autofocus
           fluid />
       </div>
-    </Animate>
+    </div>
 </template>
 
 <i18n>

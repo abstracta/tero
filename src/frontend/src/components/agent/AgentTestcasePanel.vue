@@ -11,16 +11,22 @@ import { initializeCodeActionHandler, renderMarkDown } from '../../../../common/
 import { useTestExecutionStore } from '@/composables/useTestExecutionStore';
 import { useTestCaseStore } from '@/composables/useTestCaseStore';
 import { IconArrowLeft, IconPencil, IconLoader2, IconSquareCheckFilled, IconSquareXFilled, IconSquareChevronsRightFilled } from '@tabler/icons-vue';
+import { useSidePanel } from '@/composables/useSidePanel';
+import ThoughtProcessPanel from '@/components/chat/ThoughtProcessPanel.vue';
 
 const api = new ApiService()
 const { t } = useI18n()
 const { handleError } = useErrorHandler()
 const { testExecutionStore } = useTestExecutionStore()
 const { testCasesStore, addTestCase, setSelectedTestCase, refreshTestCase } = useTestCaseStore()
+const { togglePanel } = useSidePanel()
+
+const handleOpenThoughtProcess = (message: AgentTestcaseChatUiMessage) => {
+  togglePanel(ThoughtProcessPanel, { source: message })
+}
 
 const props = defineProps<{
     agentId: number,
-    threadId?: number,
     isEditing?: boolean,
     isNewTestCase?: boolean
 }>()
@@ -336,8 +342,10 @@ watch(executionState, (newState) => {
                 toolName: su.toolName,
                 description: su.description,
                 args: su.args,
+                argsPath: su.argsPath,
                 step: su.step,
                 result: su.result,
+                errorId: su.errorId,
                 timestamp: su.timestamp
             }))
         }
@@ -583,7 +591,11 @@ defineExpose({
                     <div v-if="messages.length > 0 && (isEditing || testCaseResult?.status !== TestCaseResultStatus.PENDING)" class="flex flex-col w-full pt-6">
                         <div v-for="message in messages" :key="message.uuid">
                             <div v-if="!message.isUser && message.statusUpdates.length > 0 && !isComparingResultWithTestSpec" class="px-2 py-3">
-                                <ChatStatus :status-updates="message.statusUpdates" :is-complete="message.isStatusComplete" />
+                                <ChatStatus
+                                  :status-updates="message.statusUpdates"
+                                  :is-complete="message.isStatusComplete"
+                                  @open-detail="handleOpenThoughtProcess(message)"
+                                />
                             </div>
                             <AgentTestcaseChatMessage
                                 v-if="editingMessageUuid !== message.uuid"

@@ -49,7 +49,7 @@ const getRemainingDaysUntilNextMonth = (): number=> {
       :style="{ width: (budgetStore.usage <= 1 ? budgetStore.usage * 100 : 100) + '%' }"
     ></div>
   </div>
-  <div class="text-content-muted text-sm mt-2 mb-4">
+  <div class="text-content-muted text-sm mt-2 mb-4 whitespace-nowrap">
     {{ t('consumedBudget', { budget: (budgetStore.usage <= 1 ? budgetStore.usage * 100 : 100).toFixed(1) }) }}
     <br/>
     {{ t(remainingDays > 1 ? 'renewDate_plural': 'renewDate_one', {days: remainingDays})}}

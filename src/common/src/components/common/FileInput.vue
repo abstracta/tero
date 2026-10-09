@@ -5,24 +5,26 @@ import { UploadedFile, FileStatus } from '../../utils/domain'
 import { ErrorMessage } from './ErrorBox.vue'
 
 const { t } = useI18n()
-const MAX_FILE_SIZE_MB = 50
-const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 const SMOOTH_DRAG_DELAY_MS = 120
 const props = withDefaults(defineProps<{
   allowedExtensions?: string[]
   variant?: 'zone' | 'input'
   maxFiles?: number
+  maxFileSizeMb?: number
   attachedFiles: UploadedFile[]
   showLabel?: boolean
   disabled?: boolean
 }>(), {
   variant: 'input',
   maxFiles: -1,
+  maxFileSizeMb: 50,
   attachedFiles: () => [],
   allowedExtensions: () => [],
   showLabel: false,
   disabled: false
 })
+
+const maxFileSizeBytes = computed(() => props.maxFileSizeMb * 1024 * 1024)
 
 const inputRef = ref<HTMLInputElement | null>(null)
 const emit = defineEmits<{
@@ -37,10 +39,6 @@ const formattedFileNames = (fileNames: string[]) => {
 
 const formattedFileAccept = computed(() => {
   return props.allowedExtensions.map((ext) => `.${ext}`).join(',')
-})
-
-const allowMultiple = computed(() => {
-  return props.maxFiles === -1 || props.maxFiles > 1
 })
 
 const isMaxFilesReached = computed(() => {
@@ -58,7 +56,7 @@ const buildErrorMessage = (files: string[], errorType: string) => {
   const errorMessages = {
     filesTooLarge: {
       title: t('filesTooLargeTitle'),
-      message: t('filesTooLarge', { files: formattedFileNames(files), max: MAX_FILE_SIZE_MB })
+      message: t('filesTooLarge', { files: formattedFileNames(files), max: props.maxFileSizeMb })
     },
     unsupportedFiles: {
       title: t('unsupportedFilesTitle'),
@@ -85,7 +83,7 @@ const validateFiles = (files: File[] | FileList) => {
   }
 
   newFiles.forEach((file) => {
-    const isOverMaxSize = file.size > MAX_FILE_SIZE_BYTES
+    const isOverMaxSize = file.size > maxFileSizeBytes.value
     const isUnsupportedType = !isFileExtensionSupported(file.name)
     const isDuplicate = props.attachedFiles.some((attached) => attached.name === file.name && attached.file?.size === file.size)
 
@@ -175,7 +173,7 @@ defineExpose({
         <div class="w-full flex flex-col items-center gap-2">
           <span class="bold-span" v-html="t('dragDropBrowse', maxFiles === 1 ? maxFiles : 2)"></span>
           <span v-if="showLabel" class="text-sm text-content-muted">
-            {{ t('supportedFileTypes') }}: <span class="font-semibold">{{ formattedFileNames(allowedExtensions) }}</span> | {{ t('maxFileSize') }}: <span class="font-semibold">{{ MAX_FILE_SIZE_MB }} MB</span>
+            {{ t('supportedFileTypes') }}: <span class="font-semibold">{{ formattedFileNames(allowedExtensions) }}</span> | {{ t('maxFileSize') }}: <span class="font-semibold">{{ maxFileSizeMb }} MB</span>
           </span>
         </div>
       </div>

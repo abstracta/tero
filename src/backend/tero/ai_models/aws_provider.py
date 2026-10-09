@@ -2,15 +2,19 @@ import io
 import json
 import logging
 import time
-from typing import Optional, cast
+from collections.abc import Sequence
+from typing import Any, Optional, cast
 import urllib.request
 import uuid
 
 import asyncio
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 from langchain_aws import ChatBedrockConverse, BedrockEmbeddings
+from langchain_aws.utils import parse_model_provider
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.runnables import Runnable
 import tiktoken
 
 from ..core.env import env
@@ -20,8 +24,26 @@ from .domain import AiModelProvider
 logger = logging.getLogger(__name__)
 
 
+class CachingChatBedrockConverse(ChatBedrockConverse):
+    def bind_tools(self, tools: Sequence[Any], **kwargs: Any) -> Runnable:
+        # langchain_aws has no cache_control field on the model; langgraph calls bind_tools() directly on the
+        # instance which creates a fresh binding, so cache_control must be injected here on every call.
+        kwargs.setdefault("cache_control", {"ttl": "5m"})
+        return super().bind_tools(tools, **kwargs)
+
+
 def build_aws_service_client(service_name: str):
     return boto3.client(service_name, region_name=env.aws_region, **build_aws_creds())
+
+
+def build_resilience_config(request_timeout: Optional[float], max_retries: Optional[int]) -> dict:
+    # Bedrock has no request_timeout/max_retries kwargs; they are set via a botocore Config.
+    # botocore max_attempts counts the initial attempt, so add 1 to keep "retries" semantics.
+    # Default 600s to align with other providers; botocore's default is only 60s.
+    config_kwargs: dict = {"read_timeout": int(request_timeout if request_timeout is not None else 600)}
+    if max_retries is not None:
+        config_kwargs["retries"] = {"max_attempts": max_retries + 1, "mode": "standard"}
+    return {"config": Config(**config_kwargs)}
 
 
 def build_aws_creds() -> dict:
@@ -35,51 +57,50 @@ class AWSProvider(AiModelProvider):
 
     def __init__(self):
         super().__init__()
-        self.model_arn_map = {}
 
-    def _build_chat_model(self, model: str, temperature: Optional[float], reasoning_effort: Optional[str], streaming: bool) -> BaseChatModel:
+    def build_streaming_chat_model(self, model: str, temperature: Optional[float] = None, reasoning_effort: Optional[str] = None, max_tokens: Optional[int] = None) -> BaseChatModel:
+        ret = cast(CachingChatBedrockConverse, super().build_streaming_chat_model(model, temperature, reasoning_effort))
+        if max_tokens is not None:
+            ret.max_tokens = max_tokens
+        return ret
+
+    def _build_chat_model(self, model: str, temperature: Optional[float], reasoning_effort: Optional[str], streaming: bool, request_timeout: Optional[float] = None, max_retries: Optional[int] = None) -> BaseChatModel:
         aws_model_id = env.aws_model_id_mapping.get(model)
         if not aws_model_id:
             raise ValueError(f"Model {model} not supported by AWS")
-        return ChatBedrockConverse(
+        return CachingChatBedrockConverse(
             region_name=env.aws_region,
-            model=self._get_model_arn(aws_model_id),
+            model=aws_model_id,
             provider=self._get_model_provider(aws_model_id),
             temperature=temperature,
+            additional_model_request_fields=self._build_additional_model_request_fields(reasoning_effort),
+            **build_resilience_config(request_timeout, max_retries),
             **build_aws_creds())
+
+    def _build_additional_model_request_fields(self, reasoning_effort: Optional[str]) -> Optional[dict]:
+        if not reasoning_effort:
+            return None
+        return {
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": reasoning_effort},
+        }
 
     def supports_model(self, model: str) -> bool:
         return model in env.aws_model_id_mapping
 
-    def _get_model_arn(self, model: str) -> str:
-        if model not in self.model_arn_map:
-            if not env.aws_region:
-                raise ValueError("AWS region is not set")
-            bedrock_client = build_aws_service_client("bedrock")
-            inference_profiles = bedrock_client.list_inference_profiles()
-            inference_profile_summaries = inference_profiles['inferenceProfileSummaries']
-            for inference_profile in inference_profile_summaries:
-                profile_id = inference_profile["inferenceProfileId"]
-                model_id = profile_id.replace("us.", "").replace("eu.", "")
-                if model_id == model:
-                    arn = inference_profile["inferenceProfileArn"]
-                    self.model_arn_map[model] = arn
-                    return arn
-            raise ValueError(f"Model {model} not supported")
-        return self.model_arn_map[model]
-
     def _get_model_provider(self, model: str) -> str:
-        return model.split(".")[0]
+        return parse_model_provider(model)
 
     def is_rate_limit_error(self, exc: Exception) -> bool:
         return isinstance(exc, ClientError) and exc.response['Error']['Code'] in (
             'ThrottlingException', 'TooManyRequestsException'
         )
 
-    def build_embedding(self, model: str) -> BedrockEmbeddings:
+    def build_embedding(self, model: str, request_timeout: Optional[float] = None, max_retries: Optional[int] = None) -> BedrockEmbeddings:
         return BedrockEmbeddings(
             region_name=env.aws_region,
             model_id=cast(str, env.aws_model_id_mapping.get(model)),
+            **build_resilience_config(request_timeout, max_retries),
             **build_aws_creds())
 
     def count_tokens(self, txt: str, model: str) -> int:

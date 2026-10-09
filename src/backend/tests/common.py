@@ -45,6 +45,11 @@ GLOBAL_TEAM_ID = 1
 TEST_ICON = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAA1JREFUGFdjWCMg9B8ABAgBzkPo1OYAAAAASUVORK5CYII="
 
 
+def docs_ingestion_timeout(func):
+    # 2x the slowest green ingestion average, so a hang fails inside the CI job.
+    return pytest.mark.timeout(75)(func)
+
+
 @pytest.fixture
 def stub_docs_tool_generate_description():
     with patch("tero.tools.docs.tool.DocsTool._generate_description", new=AsyncMock(return_value="stub description")):
@@ -103,8 +108,10 @@ async def create_thread(agent_id: int, client: AsyncClient) -> Response:
     return await client.post(THREADS_PATH, json=ThreadCreateApi(agent_id=agent_id).model_dump())
 
 
-def add_message_to_thread(client: AsyncClient, thread_id: int, message: str, parent_message_id:Optional[int] = None, files:List[str] = [], file_ids:List[int] = [], isInAgentEdition:Optional[bool] = False) -> AsyncContextManager[Response]:
+def add_message_to_thread(client: AsyncClient, thread_id: int, message: str, parent_message_id:Optional[int] = None, files:List[str] = [], file_ids:List[int] = [], isInAgentEdition:Optional[bool] = False, collapsed_name:Optional[str] = None) -> AsyncContextManager[Response]:
     form_data = {"text": message, "origin": "USER"}
+    if collapsed_name is not None:
+        form_data["collapsedName"] = collapsed_name
     if parent_message_id is not None:
         form_data["parentMessageId"] = str(parent_message_id)
     if isInAgentEdition is not None:

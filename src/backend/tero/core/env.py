@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     openid_scope : str
     allowed_users : list[str] = []
     disable_publish_global : Optional[bool] = False
+    max_file_size_mb : int = 50
     contact_email : str
     azure_endpoints : list[str] = []
     azure_api_keys : list[SecretStr] = []
@@ -59,6 +60,7 @@ class Settings(BaseSettings):
     google_model_id_mapping : dict[str, str]
     openai_api_key : Optional[SecretStr] = None
     openai_model_id_mapping : dict[str, str]
+    openai_tool_strict : bool = False
     vllm_urls : List[str] = []
     vllm_api_keys : List[SecretStr] = []
     vllm_model_id_mapping : dict[str, str] = {}
@@ -67,16 +69,27 @@ class Settings(BaseSettings):
     docs_tool_retrieve_top : int
     docs_tool_description_chunk_size : int
     docs_tool_description_chunk_overlap : int
+    docs_tool_hybrid_search_enabled : bool = True
+    docs_tool_rrf_k : int = 60
     tool_oauth_token_ttl_minutes : int
     tool_oauth_state_ttl_minutes : int
     mcp_tool_oauth_client_registration_ttl_minutes : int
     web_tool_tavily_api_key : Optional[SecretStr] = None
     web_tool_google_custom_search_engine_id : Optional[str] = None
     web_tool_google_api_key : Optional[SecretStr] = None
+    azure_devops_tool_tenant_id : Optional[str] = None
+    azure_devops_tool_client_id : Optional[str] = None
+    azure_devops_tool_client_secret : Optional[SecretStr] = None
+    jira_tool_client_id : Optional[str] = None
+    jira_tool_client_secret : Optional[SecretStr] = None
+    sql_tool_azure_tenant_id : Optional[str] = None
+    sql_tool_azure_client_id : Optional[str] = None
+    sql_tool_azure_client_secret : Optional[SecretStr] = None
     web_tool_tavily_cost_per_1k_credits_usd : float
     web_tool_google_cost_per_1k_searches_usd : float
     browser_tool_playwright_mcp_url : str
-    browser_tool_playwright_output_dir : str
+    browser_tool_playwright_output_dir : str = "var/playwright-output"
+    codebase_tool_repos_path : str = "var/codebase-repos"
     smtp_hostname : Optional[str] = None
     smtp_port : Optional[int] = None
     smtp_username : Optional[str] = None

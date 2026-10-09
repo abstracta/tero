@@ -101,7 +101,7 @@ async def test_test_case_with_own_evaluator_doesnt_inherit_agent_updates(client:
 
 @freeze_time(CURRENT_TIME)
 async def test_run_test_case_with_specific_evaluator(client: AsyncClient, last_message_id: int, last_suite_run_id: int, last_result_id: int):
-    expected_input = "Which is the first natural number? Only provide the number"
+    expected_input = "Which is the first natural number? Only provide the number. Don't ask follow up questions"
     expected_response_chunks = ["1"]
     expected_suite_run_id = last_suite_run_id + 1
     results_per_run = 4

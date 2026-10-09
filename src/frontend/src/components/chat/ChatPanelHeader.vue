@@ -14,7 +14,7 @@ const emit = defineEmits(['newChat', 'showPastChats', 'createTestCase', 'exportC
 
 const handleChatDelete = async (chat: Thread)=>{
   try {
-    await deleteChat(chat.id);
+    await deleteChat(chat);
     emit('newChat')
   } catch (e) {
     handleError(e);
@@ -31,13 +31,13 @@ const handleChatDelete = async (chat: Thread)=>{
             @delete-chat="handleChatDelete" @new-chat="emit('newChat')" @create-test-case="emit('createTestCase')" @export-chat="emit('exportChat')"/>
         </Animate>
       </div>
-      <div class="flex items-center gap-2">
-        <SimpleButton v-if="chat.name" v-tooltip.bottom="t('newChatTooltip')" @click="emit('newChat')">
+      <div class="flex items-center gap-2 min-w-0 flex-1">
+        <SimpleButton v-if="chat.name && !agent.readOnly" v-tooltip.bottom="t('newChatTooltip')" class="shrink-0" @click="emit('newChat')">
           <IconMessage />
         </SimpleButton>
-        <span class="text-content-muted max-w-[400px]">{{ chat.name }}</span>
+        <span class="text-content-muted line-clamp-2 min-w-0 wrap-break-word">{{ chat.name }}</span>
       </div>
-      <div class="flex flex-grow justify-end">
+      <div class="flex shrink-0">
         <Notifications />
       </div>
     </div>

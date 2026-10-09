@@ -99,7 +99,6 @@ const onCancel = () => {
     "tokenLabel": "Token",
     "tokenLabelGithub": "Personal Access Token",
     "tokenLabelYoutrack": "Permanent token",
-    "tokenLabelPractitest": "Personal API Token",
     "cancel": "Cancel",
     "submit": "Submit"
   },
@@ -110,7 +109,6 @@ const onCancel = () => {
     "tokenLabel": "Token",
     "tokenLabelGithub": "Personal Access Token",
     "tokenLabelYoutrack": "Token permanente",
-    "tokenLabelPractitest": "Token personal de API",
     "cancel": "Cancelar",
     "submit": "Enviar"
   }

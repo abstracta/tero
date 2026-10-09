@@ -6,7 +6,7 @@ export default defineContentScript({
   matches: ['http://*/*', 'https://*/*'],
   main(ctx) {
     let iframe = document.createElement('iframe')
-    iframe.id="browser-copilot"
+    iframe.id = `browser-copilot-${browser.runtime.id}`
     setSidebarIframeStyle(iframe)
     iframe.allow = "clipboard-write; microphone"
     iframe.src = browser.runtime.getURL("/iframe.html")

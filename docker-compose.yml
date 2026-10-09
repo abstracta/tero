@@ -46,7 +46,9 @@ services:
       FRONTEND_OPENID_URL: "http://localhost:8080/realms/tero"
       FRONTEND_URL: "http://localhost:8000"
       BROWSER_TOOL_PLAYWRIGHT_MCP_URL: "http://playwright:8931/mcp"
+      # need to set these values since env_file overrides the default values from the docker image
       BROWSER_TOOL_PLAYWRIGHT_OUTPUT_DIR: /tmp/playwright-output
+      CODEBASE_TOOL_REPOS_PATH: /data/codebase-repos
     env_file: .env
     ports:
       - "8000:8000"
@@ -55,6 +57,7 @@ services:
       - keycloak
     volumes:
       - ./src/backend/var/playwright-output:/tmp/playwright-output
+      - ./src/backend/var/codebase-repos:/data/codebase-repos
   playwright:
     image: mcp/playwright@sha256:5f0f926783f81f36ea72cae4b783b01cdd04d26edff08f3976a6f82e436e306e
     ports:

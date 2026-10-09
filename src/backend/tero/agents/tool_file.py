@@ -8,6 +8,7 @@ from ..core import repos as repos_module
 from ..files.core import add_encoding_to_content_type, QuotaExceededError
 from ..files.domain import File, FileStatus, FileMetadata
 from ..files.repos import FileRepository
+from ..threads.domain import ModelRateLimitError
 from ..tools.core import AgentTool
 from ..tools.repos import ToolRepository
 from ..users.domain import User
@@ -43,6 +44,9 @@ async def _add_tool_file(file_id: int, user_id: int, tool_id: str, agent_id: int
         except QuotaExceededError:
             f.status = FileStatus.QUOTA_EXCEEDED
             logger.error(f"Quota exceeded for user {user_id} when adding tool file {file_id} {f.name}")
+        except ModelRateLimitError:
+            f.status = FileStatus.RATE_LIMITED
+            logger.warning(f"Rate limited by AI provider when adding tool file {file_id} {f.name}")
         except Exception as e:
             f.status = FileStatus.ERROR
             logger.error(f"Error adding tool file {file_id} {f.name} {e}", exc_info=True)

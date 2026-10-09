@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { ref, onMounted, watch, computed } from 'vue'
-import { TeamRoleStatus, MY_TEAM_ID, TeamUser } from '@/services/api'
+import { TeamRoleStatus, MY_TEAM_ID, GLOBAL_TEAM_ID, TeamUser, Role, UserUpdate } from '@/services/api'
 import { ApiService } from '@/services/api'
 import { useErrorHandler } from '@/composables/useErrorHandler'
 import { useDebounce } from '@/composables/useDebounce'
-import { Role } from '@/services/api'
+import { loadUserProfile } from '@/composables/useUserProfile'
 import auth from '@/services/auth'
+import SidebarEditor from '@/components/sidebar/SidebarEditor.vue'
 
 const { t } = useI18n()
 const { handleError } = useErrorHandler()
@@ -33,14 +34,25 @@ const loadingMoreUsers = ref<boolean>(false)
 const hasMoreUsers = ref<boolean>(true)
 const isSearchingUser = ref<boolean>(false)
 const searchUser = ref<string>('')
+const isBudgetOwner = ref(false)
+const canEditBudget = computed(() => isBudgetOwner.value && props.teamId === GLOBAL_TEAM_ID)
+
 const roleNames = computed<Record<string, string>>(() => ({
+  [Role.BUDGET_OWNER]: t('budgetOwner'),
   [Role.TEAM_OWNER]: t('teamOwner'),
   [Role.TEAM_MEMBER]: t('teamMember'),
   [Role.TEAM_EDITOR]: t('teamEditor')
 }))
 
+const roleSelectOptions = computed(() => {
+  return Object.entries(roleNames.value)
+    .filter(([key]) => key !== Role.BUDGET_OWNER || canEditBudget.value)
+    .map(([key, value]) => ({ label: value, value: key }))
+})
+
 const showAddUserModal = ref<boolean>(false)
 const editingRoleRows = ref<number[]>([])
+const editingBudgetRows = ref<number[]>([])
 const selectedUserToDelete = ref<TeamUser | null>(null)
 const showDeleteUserModal = computed(() => selectedUserToDelete.value !== null)
 const selectedUserModalHeader = computed(() => t(`${buildDeleteUserKey()}Title`, { name: selectedUserToDelete.value?.name }))
@@ -58,6 +70,10 @@ const buildDeleteUserKey = (): string => {
 }
 
 onMounted(async () => {
+  const profile = await loadUserProfile()
+  isBudgetOwner.value = profile?.teams.some(
+    (team) => team.id === GLOBAL_TEAM_ID && team.role === Role.BUDGET_OWNER && team.status === TeamRoleStatus.ACCEPTED
+  ) ?? false
   await loadUsersData()
 })
 
@@ -108,12 +124,24 @@ const performDebouncedUserSearch = useDebounce(loadData)
 watch(
   () => props.teamId,
   async () => {
+    editingBudgetRows.value = []
+    editingRoleRows.value = []
     await loadUsersData()
   }
 )
 
 const handleEditUserRole = (userId: number) => {
+  editingBudgetRows.value = editingBudgetRows.value.filter((id) => id !== userId)
   editingRoleRows.value.push(userId)
+}
+
+const handleEditUserBudget = (userId: number) => {
+  editingRoleRows.value = editingRoleRows.value.filter((id) => id !== userId)
+  editingBudgetRows.value.push(userId)
+}
+
+const cancelBudgetEdit = (userId: number) => {
+  editingBudgetRows.value = editingBudgetRows.value.filter((id) => id !== userId)
 }
 
 const checkCurrentUser = async (username: string) => {
@@ -133,6 +161,36 @@ const handleRoleChange = async (user: TeamUser) => {
     handleError(error)
   } finally {
     editingRoleRows.value = editingRoleRows.value.filter((id) => id !== user.id)
+    emit('isSaving', false)
+  }
+}
+
+const handleBudgetChange = async (user: TeamUser, value: string) => {
+  const monthlyUsdLimit = Number(value)
+  if (!monthlyUsdLimit || monthlyUsdLimit <= 0) return
+  emit('isSaving', true)
+  try {
+    const result = await api.updateUser(user.id!, new UserUpdate(undefined, monthlyUsdLimit))
+    user.monthlyUsdLimit = result.monthlyUsdLimit ?? monthlyUsdLimit
+  } catch (error) {
+    handleError(error)
+  } finally {
+    cancelBudgetEdit(user.id!)
+    emit('isSaving', false)
+  }
+}
+
+const handleUpdateUserExcludeFromMetrics = async (user: TeamUser) => {
+  emit('isSaving', true)
+  try {
+    const result = await api.updateUser(user.id!, new UserUpdate(!user.excludeFromMetrics))
+    const userIndex = users.value.findIndex(u => u.id === user.id)
+    if (userIndex !== -1) {
+      users.value[userIndex].excludeFromMetrics = result.excludeFromMetrics!
+    }
+  } catch (error) {
+    handleError(error)
+  } finally {
     emit('isSaving', false)
   }
 }
@@ -192,11 +250,24 @@ const handleConfirmDeleteUser = async () => {
           </div>
         </template>
       </Column>
+      <Column v-if="canEditBudget" field="budget" class="w-40">
+        <template #body="slotProps">
+          <SidebarEditor
+            v-if="editingBudgetRows.includes(slotProps.data.id)"
+            type="number"
+            class="my-0! p-1!"
+            :value="String(slotProps.data.monthlyUsdLimit ?? '')"
+            placeholder="10"
+            :on-save="(value) => handleBudgetChange(slotProps.data, value)"
+            :on-cancel="() => cancelBudgetEdit(slotProps.data.id)"
+          />
+        </template>
+      </Column>
       <Column field="role" class="w-15">
         <template #body="slotProps">
           <div v-if="(slotProps.data.roleStatus == TeamRoleStatus.ACCEPTED && slotProps.data.verified) || editingRoleRows.includes(slotProps.data.id)" class="flex items-center justify-end">
             <span v-if="!editingRoleRows.includes(slotProps.data.id)" class="block w-full text-right text-content-muted">{{ roleNames[slotProps.data.role as Role] }}</span>
-            <Select v-else v-model="slotProps.data.role" :options="Object.entries(roleNames).map(([key, value]) => ({ label: value, value: key }))" option-label="label" option-value="value" @change="handleRoleChange(slotProps.data)" />
+            <Select v-else v-model="slotProps.data.role" :options="roleSelectOptions" option-label="label" option-value="value" @change="handleRoleChange(slotProps.data)" />
           </div>
           <div v-else class="flex items-center w-full justify-end">
             <SimpleTag v-if="slotProps.data.roleStatus === TeamRoleStatus.REJECTED" :text="t('rejectedInvitation')" class="bg-surface-muted !text-content-muted" />
@@ -206,7 +277,15 @@ const handleConfirmDeleteUser = async () => {
       </Column>
       <Column field="" class="w-10">
         <template #body="slotProps">
-          <DashboardUserMenu :user="slotProps.data" :team-id="props.teamId" @edit-user-role="handleEditUserRole(slotProps.data.id)" @delete-user="handleDeleteUser(slotProps.data)" />
+          <DashboardUserMenu
+            :user="slotProps.data"
+            :team-id="props.teamId"
+            :can-edit-budget="canEditBudget"
+            @edit-user-role="handleEditUserRole(slotProps.data.id)"
+            @edit-budget="handleEditUserBudget(slotProps.data.id)"
+            @delete-user="handleDeleteUser(slotProps.data)"
+            @update-user-exclude-from-metrics="handleUpdateUserExcludeFromMetrics(slotProps.data)"
+          />
         </template>
       </Column>
     </DataTable>
@@ -220,7 +299,7 @@ const handleConfirmDeleteUser = async () => {
       </SimpleButton>
     </template>
   </DashboardCard>
-  <DashboardAddUserModal v-model:show-modal="showAddUserModal" :team-id="props.teamId" @users-added="loadUsersData" />
+  <DashboardAddUserModal v-model:show-modal="showAddUserModal" :team-id="props.teamId" :can-assign-budget-owner="canEditBudget" @users-added="loadUsersData" />
   <Dialog
     :visible="showDeleteUserModal"
     :header="selectedUserModalHeader"
@@ -250,6 +329,7 @@ const handleConfirmDeleteUser = async () => {
     "loadMoreUsers": "Load more users",
     "searchUser": "Search user",
     "noUsersFound": "No users found",
+    "budgetOwner": "Admin",
     "teamOwner": "Leader",
     "teamMember": "Member",
     "teamEditor": "Editor",
@@ -272,6 +352,7 @@ const handleConfirmDeleteUser = async () => {
     "loadMoreUsers": "Cargar más usuarios",
     "searchUser": "Buscar usuario",
     "noUsersFound": "No se encontraron usuarios",
+    "budgetOwner": "Administrador",
     "teamOwner": "Líder",
     "teamMember": "Miembro",
     "teamEditor": "Editor",

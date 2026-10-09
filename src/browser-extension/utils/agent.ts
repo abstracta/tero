@@ -5,6 +5,7 @@ import { fetchJson, fetchStreamJson, fetchResponse, streamFromResponse, ServerSe
 import { AgentFlow } from "./flow"
 import { addAgent, findAgentById, ExistingAgentError } from "./agent-repository"
 import { AgentPrompt } from "../../common/src/utils/domain"
+import type { StatusUpdate } from "../../common/src/components/chat/ChatMessage.vue"
 import { handleToolAuthRequestsIn } from "./tool-oauth"
 
 export abstract class AgentSource {
@@ -187,7 +188,7 @@ export interface MessagePart {
     step?: string
     description?: string
     args?: string
-    result?: string | string[]
+    result?: StatusUpdate['result']
   }
 }
 

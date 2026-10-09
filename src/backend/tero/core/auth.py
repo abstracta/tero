@@ -161,7 +161,7 @@ async def get_current_user(token: Annotated[Optional[str], Depends(auth_scheme)]
                 raise _build_auth_exception()
             ret = await user_repo.create_user(User(username=username, name=name, monthly_usd_limit=env.monthly_usd_limit_default))
             if ret.id == 1:
-                await TeamRepository(db).save_team_role(TeamRole(user_id=ret.id, team_id=GLOBAL_TEAM_ID, role=Role.TEAM_OWNER, status=TeamRoleStatus.ACCEPTED))
+                await TeamRepository(db).save_team_role(TeamRole(user_id=ret.id, team_id=GLOBAL_TEAM_ID, role=Role.BUDGET_OWNER, status=TeamRoleStatus.ACCEPTED))
         elif not ret.name and name:
             ret.name = name
             ret = await user_repo.update_user(ret)

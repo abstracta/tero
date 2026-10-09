@@ -1,5 +1,5 @@
 <template>
-  <div class="flex flex-col gap-10 px-4 py-2 mb-4 overflow-y-auto animate-pulse min-h-0">
+  <div class="flex flex-col gap-3 px-4 py-2 mb-10 overflow-y-auto animate-pulse min-h-0">
 
     <!-- Basic Info section header -->
     <div class="flex justify-between items-center border-b pb-3 mb-2">

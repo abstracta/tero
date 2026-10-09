@@ -31,7 +31,7 @@ const showCreateTestCaseConfirmation = ref(false);
 const menuIsActive = ref(false);
 const showAgentInfoModal = ref(false);
 
-const agentName = computed(() => props.agent.name ? props.agent.name : t('newAgentName', { agentId: props.agent.id }));
+const agentName = computed(() => props.agent.name || t(props.agent.readOnly ? 'unavailableAgent' : 'newAgentName', { agentId: props.agent.id }));
 
 const handlePreviousChats = () => {
   emit('showPastChats');
@@ -75,7 +75,7 @@ const canViewAgentInfo = computed(() => props.agent.canEdit || !props.agent.isPr
 </script>
 <template>
   <div class="flex items-center gap-2 px-3 py-1.5 text-content-muted border rounded-2xl dark:bg-surface-muted dark:border-none" :class="[{ '!bg-abstracta !text-white': menuIsActive }]">
-    <AgentAvatar :agent="agent" :desaturated="!menuIsActive">
+    <AgentAvatar :agent="agent" :desaturated="!menuIsActive" :show-shared-status="agent.readOnly">
       <IconSparkles class="text-white" fill="currentColor" />
     </AgentAvatar>
     <span
@@ -92,11 +92,11 @@ const canViewAgentInfo = computed(() => props.agent.canEdit || !props.agent.isPr
         @toggle-active="toggleActive"
         @close-menu="closeMenu"
         :items="[
-          {
+          ...(!agent.readOnly ? [{
             label: t('newChatTooltip'),
             tablerIcon: IconMessage2Plus,
             command: () => emit('newChat')
-          },
+          }] : []),
           {
             label: t('previousChatsTooltip'),
             tablerIcon: IconHistory,
@@ -117,8 +117,8 @@ const canViewAgentInfo = computed(() => props.agent.canEdit || !props.agent.isPr
             tablerIcon: IconTrash,
             command: ()=> showDeleteConfirmation = true
           },
-          { separator: true },
-          ...(!editingAgent ? [{
+          ...(!agent.readOnly ? [{ separator: true }] : []),
+          ...(!editingAgent && !agent.readOnly ? [{
             label: t('agentInfoTooltip'),
             tablerIcon: IconInfoCircle,
             command: handleShowAgentInfo
@@ -128,7 +128,7 @@ const canViewAgentInfo = computed(() => props.agent.canEdit || !props.agent.isPr
             tablerIcon: IconEditCircle,
             command: handleEditAgent
           }] : []),
-          ...(canViewAgentInfo ? [{
+          ...(canViewAgentInfo && !agent.readOnly ? [{
             label: t('cloneAgentTooltip'),
             tablerIcon: IconCopyPlus,
             command: handleCloneAgent
@@ -185,7 +185,8 @@ const canViewAgentInfo = computed(() => props.agent.canEdit || !props.agent.isPr
       "createTestCaseConfirmTitle": "Create test from chat",
       "createTestCaseConfirmDescription": "This will create a new test case with the currently visible conversation. You will be redirected to the test case after creation.",
       "cancelButton": "Cancel",
-      "createButton": "Create"
+      "createButton": "Create",
+      "unavailableAgent": "Unavailable agent"
     },
     "es": {
       "deleteChatTooltip": "Eliminar chat",
@@ -203,7 +204,8 @@ const canViewAgentInfo = computed(() => props.agent.canEdit || !props.agent.isPr
       "createTestCaseConfirmTitle": "Crear test a partir de chat",
       "createTestCaseConfirmDescription": "Esto creará un nuevo caso de prueba con la conversación actualmente visible. Serás redirigido al caso de prueba después de la creación.",
       "cancelButton": "Cancelar",
-      "createButton": "Crear"
+      "createButton": "Crear",
+      "unavailableAgent": "Agente no disponible"
     }
   }
 </i18n>

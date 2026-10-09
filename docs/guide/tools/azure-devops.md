@@ -6,9 +6,11 @@ The agent can help with:
 
 - **Projects & teams** — list and read projects and teams, and inspect team membership
 - **Work items** — search with queries; read, create, update, and delete work items; inspect work item types, fields, states, and relation types; manage field definitions when needed
+- **Saved queries** — run a saved work item query and get its work items already resolved, optionally narrowed down by an extra condition, with additional fields, and with their related work items
 - **Traceability** — link work items together (for example user stories and test cases)
 - **Test plans** — browse and manage test plans, suites, and configurations
-- **Test cases** — list cases in a suite, add or remove them from suites, and find which suites contain a given case
+- **Test cases** — list cases in a suite, add or remove them from suites, find which suites contain a given case, and delete a test case (one at a time)
+- **Test results** — get the outcome of every test case in a suite and all of its child suites, together with the bugs they are associated with
 
 #### Authentication
 
@@ -30,6 +32,6 @@ The scopes you select in Tero control what the agent can do:
 - **Work items (read)** — read work items
 - **Work items (write)** — create, update, and delete work items
 - **Test plans (read)** — read test plans, suites, and cases
-- **Test plans (write)** — manage test plans, suites, configurations, and suite membership
+- **Test plans (write)** — manage test plans, suites, configurations, and suite membership, and delete test cases one at a time
 
 See [Entra OAuth for Azure DevOps](https://learn.microsoft.com/en-us/azure/devops/integrate/get-started/authentication/entra-oauth?view=azure-devops).

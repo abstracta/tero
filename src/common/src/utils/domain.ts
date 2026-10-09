@@ -2,7 +2,8 @@ export enum FileStatus {
     PENDING = 'PENDING',
     PROCESSED = 'PROCESSED',
     ERROR = 'ERROR',
-    QUOTA_EXCEEDED = 'QUOTA_EXCEEDED'
+    QUOTA_EXCEEDED = 'QUOTA_EXCEEDED',
+    RATE_LIMITED = 'RATE_LIMITED'
   }
   
 export class UploadedFile {
@@ -28,14 +29,16 @@ export class AgentPrompt {
     shared: boolean
     canEdit: boolean
     starter: boolean
+    collapsed: boolean
   
-    constructor(id?: number, name?: string, content?: string, shared: boolean = false, canEdit: boolean = true, starter: boolean = false) {
+    constructor(id?: number, name?: string, content?: string, shared: boolean = false, canEdit: boolean = true, starter: boolean = false, collapsed: boolean = false) {
       this.id = id
       this.name = name
       this.content = content
       this.shared = shared
       this.canEdit = canEdit
       this.starter = starter
+      this.collapsed = collapsed
     }
 }
 

@@ -29,7 +29,7 @@ export default defineBackground(() => {
   const createToggleContextMenu = () => {
     browser.contextMenus.create({
       id: "toggle-browser-copilot",
-      title: "Browser Copilot",
+      title: browser.runtime.getManifest().name,
       contexts: ["all"],
     });
   };

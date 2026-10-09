@@ -44,11 +44,13 @@ const createOAuthRequiredFlow = (api: ApiService) => async (oauthRequest: OAuthR
       if (data.type === 'oauth_callback' && data.state === oauthRequest.state) {
         try {
           cleanup();
+          // the tool id of the request is used instead of the one in the callback url, since tools with
+          // several configs per agent (eg: sql) share a single callback url for all of them
           if (data.error) {
-            await api.deleteToolAuth(data.toolId, data.state);
+            await api.deleteToolAuth(oauthRequest.toolId, data.state);
             reject(new AuthenticationError(data.error == 'access_denied' ? 'authenticationAccessDenied' : 'authenticationUnknownError'));
           } else {
-            await api.completeToolOauthAuth(data.toolId, oauthRequest.agentId, data.state, data.code);
+            await api.completeToolOauthAuth(oauthRequest.toolId, oauthRequest.agentId, data.state, data.code);
             resolve();
           }
         } catch (error) {

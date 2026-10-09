@@ -1,27 +1,49 @@
 import { ChatUiMessage, type StatusUpdate } from '../components/chat/ChatMessage.vue'
+import { resultPreview } from './formatStatusAction'
 import { renderMarkDown } from './formatter'
 import { escapeHtml } from 'markdown-it/lib/common/utils'
 
 function formatStatusAction(status: StatusUpdate): string {
+  const prefix = status.agentName && status.toolName !== 'task'
+    ? `<b>${escapeHtml(status.agentName)}</b>: `
+    : ''
   const tool = escapeHtml(status.toolName || '')
+  const params = status.args == null
+    ? ''
+    : ` with params <b>${escapeHtml(typeof status.args === 'string' ? status.args : JSON.stringify(status.args))}</b>`
+  let actionText = ''
   switch (status.action) {
     case 'statusProcessing':
-      return 'Processing'
+      actionText = 'Processing'
+      break
     case 'preModelHook':
-      return 'Thinking'
+      actionText = 'Thinking'
+      break
     case 'planning':
-      return 'Planning to run tools'
+      actionText = 'Planning to run tools'
+      break
     case 'executingTool':
-      return `Executing <b>${tool}</b>`
-        + (status.step ? ` - ${escapeHtml(status.step)}` : '')
-        + (status.args != null ? ` with params <b>${escapeHtml(typeof status.args === 'string' ? status.args : JSON.stringify(status.args))}</b>` : '')
+      if (status.toolName === 'task' && status.description) {
+        actionText = `Delegating to <b>${escapeHtml(status.description)}</b>` + params
+      } else {
+        actionText = `Executing <b>${tool}</b>`
+          + (status.step ? ` - ${escapeHtml(status.step)}` : '')
+          + params
+      }
+      break
     case 'executedTool':
-      return `Tool <b>${tool}</b> execution finished`
+      actionText = status.toolName === 'task' && status.description
+        ? `Subagent <b>${escapeHtml(status.description)}</b> finished`
+        : `Tool <b>${tool}</b> execution finished`
+      break
     case 'toolError':
-      return `Error in tool <b>${tool}</b>`
+      actionText = `Error in tool <b>${tool}</b>`
+        + (status.errorId ? ` (ref: ${escapeHtml(status.errorId)})` : '')
+      break
     default:
-      return escapeHtml(status.action)
+      actionText = escapeHtml(status.action)
   }
+  return prefix + actionText
 }
 
 function renderFileAttachments(files: { name: string }[]): string {
@@ -33,17 +55,17 @@ function renderFileAttachments(files: { name: string }[]): string {
 }
 
 function renderStatusStep(status: StatusUpdate, isLast: boolean): string {
-  const descriptionHtml = status.description?.trim()
+  const descriptionHtml = status.description?.trim() && status.toolName !== 'task'
     ? `<div>Description: <i>${escapeHtml(status.description)}</i></div>`
     : ''
 
   let resultHtml = ''
   if (Array.isArray(status.result) && status.result.length > 0) {
-    resultHtml = status.result.map(doc =>
-      `<div>-<b>${escapeHtml(doc)}</b></div>`
+    resultHtml = status.result.map(item =>
+      `<div>-<b>${escapeHtml(resultPreview(item))}</b></div>`
     ).join('')
   } else if (typeof status.result === 'string' && status.result.trim()) {
-    resultHtml = `<div>Result: ${escapeHtml(status.result)}</div>`
+    resultHtml = `<div style="white-space:pre-wrap">Result: ${escapeHtml(status.result)}</div>`
   }
 
   return `<div class="status-step">
@@ -59,6 +81,37 @@ function renderStatusStep(status: StatusUpdate, isLast: boolean): string {
 </div>`
 }
 
+function renderAgentResponseBody(text: string): string {
+  return renderMarkDown(text, true).replace(/<img /g, '<img onerror="this.style.display=\'none\'" ')
+}
+
+function applyChartImages(html: string, chartImages?: string[]): string {
+  if (!chartImages?.length) return html
+  let i = 0
+  return html.replace(
+    /<div class="echarts"[^>]*><\/div><div class="echarts-data"[^>]*>[\s\S]*?<\/div>/g,
+    () => i < chartImages.length ? `<div class="chart"><img src="${chartImages[i++]}" alt="chart"></div>` : ''
+  )
+}
+
+function wrapExportHtml(innerHtml: string, title = 'Chat'): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${escapeHtml(title)}</title>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@100..800&display=swap" rel="stylesheet">
+<style>${CSS}</style>
+</head>
+<body>
+<div class="chat-container">
+${innerHtml}
+</div>
+</body>
+</html>`
+}
+
 function renderMessage(msg: ChatUiMessage): string {
   if (msg.isUser) {
     const textHtml = msg.text ? escapeHtml(msg.text).replace(/\n/g, '<br/>') : ''
@@ -67,39 +120,177 @@ function renderMessage(msg: ChatUiMessage): string {
   const thoughtHtml = msg.statusUpdates?.length
     ? `<details class="status-container"><summary class="status-header">Thought process</summary><div class="status-steps">${msg.statusUpdates.map((s, i) => renderStatusStep(s, i === msg.statusUpdates.length - 1)).join('')}</div></details>`
     : ''
-  const bodyHtml = renderMarkDown(msg.text, true).replace(/<img /g, '<img onerror="this.style.display=\'none\'" ')
-  return `<div class="message agent-message">${thoughtHtml}<div class="formatted-text agent-body">${bodyHtml}</div>${renderFileAttachments(msg.files)}</div>`
+  return `<div class="message agent-message">${thoughtHtml}<div class="formatted-text agent-body">${renderAgentResponseBody(msg.text)}</div>${renderFileAttachments(msg.files)}</div>`
+}
+
+export async function captureChartImages(container?: ParentNode | null): Promise<string[]> {
+  if (!container) return []
+  const chartDivs = container.querySelectorAll('.echarts')
+  if (!chartDivs.length) return []
+  const echarts = await import('echarts')
+  const images: string[] = []
+  chartDivs.forEach(div => {
+    const instance = echarts.getInstanceByDom(div as HTMLElement)
+    if (instance) images.push(instance.getDataURL({ type: 'png', pixelRatio: 2 }))
+  })
+  return images
 }
 
 export function generateChatHtml({ messages, agentName = 'Agent', chatName = 'Chat', chartImages }: { messages: ChatUiMessage[], agentName?: string, chatName?: string, chartImages?: string[] }): string {
   const exportDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
-  let messagesHtml = messages.map(renderMessage).join('')
-  if (chartImages?.length) {
-    let i = 0
-    messagesHtml = messagesHtml.replace(
-      /<div class="echarts"[^>]*><\/div><div class="echarts-data"[^>]*>[\s\S]*?<\/div>/g,
-      () => i < chartImages.length ? `<div class="chart"><img src="${chartImages[i++]}" alt="chart"></div>` : ''
-    )
-  }
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${escapeHtml(chatName)} - ${escapeHtml(agentName)}</title>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@100..800&display=swap" rel="stylesheet">
-<style>${CSS}</style>
-</head>
-<body>
-<div class="chat-container">
-  <header>
+  const messagesHtml = applyChartImages(messages.map(renderMessage).join(''), chartImages)
+  return wrapExportHtml(
+    `  <header>
     <h1>${escapeHtml(agentName)}</h1>
     <div>${escapeHtml(chatName)} &middot; Exported ${exportDate}</div>
   </header>
-  <div class="messages">${messagesHtml}</div>
-</div>
+  <div class="messages">${messagesHtml}</div>`,
+    `${chatName} - ${agentName}`
+  )
+}
+
+function stripInteractiveControls(html: string): string {
+  return html.replace(
+    /<div class="flex mt-4">\s*<button[\s\S]*?downloadTableCSV[\s\S]*?<\/button>\s*<\/div>/g,
+    ''
+  )
+}
+
+const COPY_BORDER = '1px solid #d9d9d9'
+const COPY_HEADER_BG = '#f4f4f4'
+const COPY_TEXT = '#1f1f1f'
+const COPY_CODE = '#2f3337'
+const COPY_MONO = "Consolas,'Courier New',Courier,monospace"
+
+function prependStyle(el: Element, extra: string) {
+  const current = el.getAttribute('style') || ''
+  el.setAttribute('style', current ? `${extra};${current}` : extra)
+}
+
+function hasOwnBackground(style: string): boolean {
+  return /(?:^|;)\s*background(?:-color)?\s*:/i.test(style)
+}
+
+function hljsColor(className: string): string | undefined {
+  return CSS.match(new RegExp(`\\.${className}(?=[,{])[^}]*color:(#[0-9a-fA-F]+)`))?.[1]
+}
+
+function inlineHljsColors(root: ParentNode) {
+  root.querySelectorAll('[class*="hljs-"]').forEach(el => {
+    for (const cls of el.classList) {
+      const color = hljsColor(cls)
+      if (color) {
+        prependStyle(el, `color:${color};font-family:${COPY_MONO}`)
+        break
+      }
+    }
+  })
+}
+
+function preserveCodeWhitespace(root: Element, doc: Document) {
+  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  const nodes: Text[] = []
+  while (walker.nextNode()) nodes.push(walker.currentNode as Text)
+  for (const node of nodes) {
+    const text = node.data.replace(/\r\n|\r/g, '\n').replace(/\t/g, '    ')
+    if (!/[ \n]/.test(text)) continue
+    const html = escapeHtml(text)
+      .replace(/ {2,}/g, spaces => '&nbsp;'.repeat(spaces.length))
+      .replace(/\n/g, '<br>')
+    const temp = doc.createElement('span')
+    temp.innerHTML = html
+    node.replaceWith(...Array.from(temp.childNodes))
+  }
+}
+
+function copyCodeCell(doc: Document, extra: string): HTMLTableCellElement {
+  const td = doc.createElement('td')
+  td.setAttribute('bgcolor', COPY_HEADER_BG)
+  td.setAttribute('style', `background:${COPY_HEADER_BG};border:${COPY_BORDER};${extra}`)
+  return td
+}
+
+function styleCodeBlocks(doc: Document) {
+  // Outlook splits <pre>/<code> backgrounds into one pill per line; a table cell keeps one box.
+  doc.querySelectorAll('pre').forEach(pre => {
+    const code = pre.querySelector('code')
+    const lang = pre.querySelector(':scope > div > span')?.textContent?.trim().toLowerCase() || ''
+    const holder = doc.createElement('div')
+    holder.innerHTML = (code?.innerHTML ?? pre.innerHTML).replace(/[\n\r]+$/, '')
+    inlineHljsColors(holder)
+    preserveCodeWhitespace(holder, doc)
+
+    const table = doc.createElement('table')
+    table.setAttribute('cellpadding', '0')
+    table.setAttribute('cellspacing', '0')
+    table.setAttribute('border', '0')
+    table.setAttribute('width', '100%')
+    table.setAttribute('style', 'border-collapse:collapse;margin:12px 0;width:100%')
+
+    if (lang) {
+      const headerRow = doc.createElement('tr')
+      const headerCell = copyCodeCell(doc, `padding:8px 12px;font-family:Arial,sans-serif;font-size:12px;color:${COPY_TEXT};border-bottom:none`)
+      headerCell.textContent = lang
+      headerRow.appendChild(headerCell)
+      table.appendChild(headerRow)
+    }
+
+    const codeRow = doc.createElement('tr')
+    const codeCell = copyCodeCell(doc, `padding:8px 12px;font-family:${COPY_MONO};font-size:13px;line-height:1.5;color:${COPY_CODE}`)
+    while (holder.firstChild) codeCell.appendChild(holder.firstChild)
+    codeRow.appendChild(codeCell)
+    table.appendChild(codeRow)
+    pre.replaceWith(table)
+  })
+}
+
+function inlineCopyStyles(html: string): string {
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  doc.querySelectorAll('button, svg').forEach(el => el.remove())
+  doc.querySelectorAll('.overflow-x-auto').forEach(wrapper => {
+    const table = wrapper.querySelector(':scope > table')
+    if (table) wrapper.replaceWith(table)
+  })
+  styleCodeBlocks(doc)
+  doc.querySelectorAll('table').forEach(table => {
+    prependStyle(table, 'border-collapse:collapse;border-spacing:0')
+  })
+  doc.querySelectorAll('th').forEach(th => {
+    prependStyle(th, `background:${COPY_HEADER_BG};font-weight:500;border:${COPY_BORDER};padding:8px 16px;white-space:nowrap;text-align:left`)
+    if (!hasOwnBackground(th.getAttribute('style') || '')) {
+      th.setAttribute('bgcolor', COPY_HEADER_BG)
+    }
+  })
+  doc.querySelectorAll('td').forEach(td => {
+    if (td.hasAttribute('bgcolor')) return
+    prependStyle(td, `border:${COPY_BORDER};padding:8px 16px;overflow-wrap:break-word`)
+  })
+  doc.querySelectorAll('code').forEach(code => {
+    prependStyle(code, `background:${COPY_HEADER_BG};font-family:${COPY_MONO};font-size:13px;padding:1px 4px`)
+  })
+  return doc.body.innerHTML
+}
+
+export function generateAgentResponseHtml(text: string, chartImages?: string[]): string {
+  const bodyHtml = stripInteractiveControls(renderAgentResponseBody(text))
+  const messageHtml = applyChartImages(
+    `<div class="formatted-text agent-body">${bodyHtml}</div>`,
+    chartImages
+  )
+  return `<html>
+<head>
+<style>${CSS}</style>
+</head>
+<body>
+<!--StartFragment-->
+${inlineCopyStyles(messageHtml)}
+<!--EndFragment-->
 </body>
 </html>`
+}
+
+export async function buildAgentResponseCopyHtml(text: string, container?: HTMLElement | null): Promise<string> {
+  return generateAgentResponseHtml(text, await captureChartImages(container))
 }
 
 export function downloadChatHtml(html: string, filename: string): void {
@@ -147,7 +338,7 @@ header h1 { font-size: 1.25rem; font-weight: 600; color: var(--text); margin-bot
   border-radius: 0.5rem;
 }
 .formatted-text { line-height: 1.375; }
-.formatted-text hr { display: none; }
+.formatted-text hr { border: none; border-top: 1px solid var(--border); margin: 0.75rem auto; width: 98%; }
 .formatted-text h1, .formatted-text h2 { font-size: 1.25rem; margin: 0.625rem 0; }
 .formatted-text h3, .formatted-text h4 { margin: 0.125rem 0; font-weight: normal; }
 .formatted-text ul, .formatted-text ol { margin-bottom: 0.625rem; }
@@ -166,10 +357,13 @@ pre > div:first-child > span { font-size: 0.75rem; text-transform: lowercase; co
 pre > code { display: block; padding: 0.5rem; background: var(--bg); border: 1px solid var(--border); border-radius: 0 0 0.5rem 0.5rem; overflow-x: auto; font-family: var(--mono); font-size: 0.875rem; line-height: 1.5; }
 pre > div:first-child > div { display: none; }
 
-table { border-collapse: collapse; width: 100%; }
-td, th { border: 1px solid var(--border); padding: 0.5rem 1rem; word-break: break-word; }
-th { background: var(--bg); font-weight: 500; }
+.flex { display: flex; }
+.flex-col { flex-direction: column; }
+.gap-2 { gap: 0.5rem; }
 .overflow-x-auto { overflow-x: auto; }
+table { border-collapse: collapse; }
+td, th { border: 1px solid var(--border); padding: 0.5rem 1rem; }
+th { background: var(--bg); font-weight: 500; }
 button[onclick="downloadTableCSV(this)"] { display: none !important; }
 
 blockquote { display: flex; gap: 0.75rem; margin: 0.5rem 0; padding: 1.5rem; border-left: 8px solid var(--bg); }

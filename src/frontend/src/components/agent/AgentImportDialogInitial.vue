@@ -11,6 +11,7 @@ const props = defineProps<{
   importing: boolean
   uploadedFiles: UploadedFile[]
   uploadedFilesError: ErrorMessage
+  maxFileSizeMb?: number
 }>()
 
 defineEmits<{
@@ -59,6 +60,7 @@ const description = computed(() => {
       <FileInput
         :attachedFiles="uploadedFiles"
         :maxFiles="1"
+        :maxFileSizeMb="maxFileSizeMb"
         showLabel
         :allowedExtensions="['zip']"
         @error="$emit('file-error', $event)"

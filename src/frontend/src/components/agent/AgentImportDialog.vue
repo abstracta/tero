@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
 import { Dialog } from 'primevue'
 import { IconX } from '@tabler/icons-vue'
 import { UploadedFile } from '../../../../common/src/utils/domain'
@@ -8,6 +8,7 @@ import AgentImportDialogInitial from './AgentImportDialogInitial.vue'
 import AgentImportDialogWarning from './AgentImportDialogWarning.vue'
 import AgentImportDialogError from './AgentImportDialogError.vue'
 import type { AgentImportResult } from '@/services/api'
+import { findManifest } from '@/services/api'
 
 const visible = defineModel<boolean>("visible")
 const props = defineProps<{
@@ -22,9 +23,16 @@ const uploadedFiles = ref<UploadedFile[]>([])
 const uploadedFilesError = ref<ErrorMessage>({ title: '', message: '' })
 const importing = ref(false)
 const dismissedImportError = ref(false)
+const maxFileSizeMb = ref<number>()
+
+onMounted(async () => {
+  const manifest = await findManifest()
+  maxFileSizeMb.value = manifest.maxFileSizeMb
+})
 
 const hasWarnings = (result: AgentImportResult) =>
   result.unavailableTools.length > 0 ||
+  result.unavailableSubagents.length > 0 ||
   result.toolsRequiringAuthentication.length > 0 ||
   !!result.unavailableModel ||
   !!result.defaultModel
@@ -96,6 +104,7 @@ watch(() => props.importError, (error) => {
         :importing="importing"
         :uploaded-files="uploadedFiles"
         :uploaded-files-error="uploadedFilesError"
+        :max-file-size-mb="maxFileSizeMb"
         @close="visible = false"
         @import="onImport"
         @remove-file="removeFile"

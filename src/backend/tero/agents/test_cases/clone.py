@@ -51,6 +51,7 @@ async def clone_test_case(
             thread_id=cloned_thread.id,
             origin=message.origin,
             text=message.text,
+            collapsed_name=message.collapsed_name,
             timestamp=message.timestamp,
         ))
 

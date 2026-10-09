@@ -374,3 +374,6 @@ components.d.ts
 .wxt
 var
 .vscfavoriterc
+
+# AI SDLC working artifacts (intent/spec/plan) are local working documents, never committed
+specs/
