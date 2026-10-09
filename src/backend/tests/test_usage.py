@@ -81,8 +81,8 @@ async def test_summary_metrics_date_validation(client: AsyncClient):
 @pytest.fixture(name="external_agents")
 def fixture_external_agents() -> List[PublicExternalAgent]:
     return [
-        PublicExternalAgent(id=1, name="ChatGPT"), 
-        PublicExternalAgent(id=2, name="Cursor"), 
+        PublicExternalAgent(id=1, name="ChatGPT"),
+        PublicExternalAgent(id=2, name="Cursor"),
         PublicExternalAgent(id=3, name="Claude")
     ]
 
@@ -240,7 +240,7 @@ async def test_usage_summary_metrics(client: AsyncClient):
     to_date = datetime.now()
     from_date = (to_date - timedelta(days=30))
     resp = await _get_usage_summary_metrics(from_date, to_date, 1, client)
-    
+
     assert_response(resp, UsageSummary(active_users=3, total_threads=4, previous_active_users=1, previous_total_threads=1))
 
 
@@ -249,7 +249,7 @@ async def test_usage_summary_metrics_team(client: AsyncClient):
     to_date = datetime.now()
     from_date = (to_date - timedelta(days=30))
     resp = await _get_usage_summary_metrics(from_date, to_date, 2, client)
-    
+
     assert_response(resp, UsageSummary(active_users=2, total_threads=3, previous_active_users=1, previous_total_threads=1))
 
 
@@ -258,7 +258,7 @@ async def test_usage_summary_metrics_me(client: AsyncClient):
     to_date = datetime.now()
     from_date = (to_date - timedelta(days=30))
     resp = await _get_usage_summary_metrics(from_date, to_date, MY_TEAM_ID, client)
-    
+
     assert_response(resp, UsageSummary(active_users=1, total_threads=2, previous_active_users=0, previous_total_threads=0))
 
 
@@ -290,7 +290,7 @@ async def test_usage_top_agents(teams: List[Team], users: List[UserListItem], ag
     to_date = datetime.now()
     from_date = (to_date - timedelta(days=30))
     resp = await _get_usage_top_agents(from_date, to_date, 1, 10, client)
-    
+
     assert_response(resp, [
         AgentUsageItem(agent_id=PRIVATE_AGENT_ID, agent_name=None, icon_bytes=None, team=None, author_name=None, active_users=3, total_threads=3, previous_active_users=0, previous_total_threads=0),
         AgentUsageItem(agent_id=agents[1].id, agent_name=agents[1].name, icon_bytes=None, team=teams[0], author_name=users[0].name, active_users=1, total_threads=1, previous_active_users=1, previous_total_threads=1)
@@ -302,7 +302,7 @@ async def test_usage_top_agents_team(teams: List[Team], users: List[UserListItem
     to_date = datetime.now()
     from_date = (to_date - timedelta(days=30))
     resp = await _get_usage_top_agents(from_date, to_date, 2, 10, client)
-    
+
     assert_response(resp, [
         AgentUsageItem(agent_id=PRIVATE_AGENT_ID, agent_name=None, icon_bytes=None, team=None, author_name=None, active_users=1, total_threads=1, previous_active_users=0, previous_total_threads=0),
         AgentUsageItem(agent_id=agents[1].id, agent_name=agents[1].name, icon_bytes=None, team=teams[0], author_name=users[0].name, active_users=1, total_threads=1, previous_active_users=1, previous_total_threads=1),
@@ -315,7 +315,7 @@ async def test_usage_top_agents_me(teams: List[Team], users: List[UserListItem],
     to_date = datetime.now()
     from_date = (to_date - timedelta(days=30))
     resp = await _get_usage_top_agents(from_date, to_date, MY_TEAM_ID, 10, client)
-    
+
     assert_response(resp, [
         AgentUsageItem(agent_id=agents[0].id, agent_name=agents[0].name, icon_bytes=None, team=None, author_name=users[0].name, active_users=1, total_threads=1, previous_active_users=0, previous_total_threads=0),
         AgentUsageItem(agent_id=agents[1].id, agent_name=agents[1].name, icon_bytes=None, team=teams[0], author_name=users[0].name, active_users=1, total_threads=1, previous_active_users=0, previous_total_threads=0),
@@ -350,7 +350,7 @@ async def test_usage_top_users(users: List[UserListItem], client: AsyncClient):
     to_date = datetime.now()
     from_date = (to_date - timedelta(days=30))
     resp = await _get_usage_top_users(from_date, to_date, 1, 10, client)
-    
+
     assert_response(resp, [
         UserUsageItem(user_id=users[0].id, user_name=users[0].name, total_threads=2, previous_total_threads=0),
         UserUsageItem(user_id=users[1].id, user_name=users[1].name, total_threads=1, previous_total_threads=1),
@@ -363,7 +363,7 @@ async def test_usage_top_users_team(users: List[UserListItem], client: AsyncClie
     to_date = datetime.now()
     from_date = (to_date - timedelta(days=30))
     resp = await _get_usage_top_users(from_date, to_date, 2, 10, client)
-    
+
     assert_response(resp, [
         UserUsageItem(user_id=users[0].id, user_name=users[0].name, total_threads=2, previous_total_threads=0),
         UserUsageItem(user_id=users[1].id, user_name=users[1].name, total_threads=1, previous_total_threads=1),
@@ -384,7 +384,7 @@ async def test_usage_top_users_team_with_pending_and_rejected_status(users: List
     to_date = datetime.now()
     from_date = (to_date - timedelta(days=30))
     resp = await _get_usage_top_users(from_date, to_date, 4, 10, client)
-    
+
     assert_response(resp, [
         UserUsageItem(user_id=users[0].id, user_name=users[0].name, total_threads=2, previous_total_threads=0),
         UserUsageItem(user_id=users[1].id, user_name=users[1].name, total_threads=1, previous_total_threads=1),
@@ -421,3 +421,19 @@ async def test_get_usage_users_forbidden(override_user_role: Callable[[Role], No
     override_user_role(Role.TEAM_MEMBER)
     resp = await client.get(f"{USAGE_PATH}/users", params=PARAMS)
     assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+
+@freeze_time(CURRENT_TIME)
+async def test_exclude_user_from_metrics(client: AsyncClient):
+    to_date = datetime.now()
+    from_date = to_date - timedelta(days=30)
+
+    resp = await _get_impact_summary_metrics(from_date, to_date, 1, client)
+    baseline_hours = resp.json()["humanHours"]
+
+    await client.put(f"{BASE_PATH}/users/{OTHER_USER_ID}", json={"excludeFromMetrics": True})
+
+    resp = await _get_impact_summary_metrics(from_date, to_date, 1, client)
+    excluded_hours = resp.json()["humanHours"]
+
+    assert baseline_hours - excluded_hours == 160

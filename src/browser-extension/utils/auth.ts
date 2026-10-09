@@ -124,9 +124,19 @@ export class AuthService {
     delays between this check and server token experiation check.
     */
     if (ret && (ret.expires_in! < 60)) {
-      return await this.userManager.signinSilent()
+      try {
+        return await this.userManager.signinSilent()
+      } catch (e) {
+        console.warn("Silent token refresh failed, clearing stored session", e)
+        await this.clearAuth()
+        return null
+      }
     }
     return ret
+  }
+
+  public async clearAuth(): Promise<void> {
+    await this.userManager.removeUser()
   }
 
   public async login(): Promise<void> {
@@ -137,7 +147,11 @@ export class AuthService {
     const user = await this.getUser()
     if (!user) {
       await this.login()
-      return (await this.getUser())!
+      const authenticatedUser = await this.getUser()
+      if (!authenticatedUser) {
+        throw new Error("Authentication failed")
+      }
+      return authenticatedUser
     }
     return user
   }

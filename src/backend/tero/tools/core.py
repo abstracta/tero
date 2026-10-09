@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 import json
 import logging
+import uuid
 from typing import Any, List, Optional, cast, Callable
 from uuid import UUID
 
@@ -10,6 +11,7 @@ import jsonschema
 from langchain.tools import BaseTool, ToolRuntime
 from langchain_core.callbacks import AsyncCallbackHandler
 from langgraph.config import get_stream_writer
+from langgraph.prebuilt.tool_node import ToolInvocationError
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from ..agents.domain import Agent, AgentToolConfig
@@ -24,7 +26,57 @@ from ..usage.domain import ToolUsage
 from ..users.domain import User
 
 
+logger = logging.getLogger(__name__)
 _SECRET_MASK = "********"
+
+
+def stored_status_result(content: Any) -> Optional[list]:
+    if not isinstance(content, str) or not content.strip():
+        return None
+    return [{"content": content.strip()}]
+
+
+def preview_status_detail(message: str) -> Optional[str]:
+    message = message.strip()
+    max_preview_status_detail_length = 200
+    if not message:
+        return None
+    elif len(message) > max_preview_status_detail_length:
+        return message[:max_preview_status_detail_length].rstrip() + "…"
+    else:
+        return message
+
+
+class UserFacingToolError(Exception):
+    """Tool error whose message is safe and useful to show in the thought process."""
+
+    def __init__(self, message: str = ""):
+        super().__init__(preview_status_detail(message) or "Error")
+
+
+def report_tool_error(tool_name: str, error: Any) -> str:
+    error_id = uuid.uuid4().hex[:8]
+    result = None
+    if isinstance(error, UserFacingToolError):
+        result = preview_status_detail(str(error))
+    elif isinstance(error, ToolInvocationError):
+        result = preview_status_detail(error.message)
+    elif isinstance(error, BaseException):
+        logger.exception("Tool %s failed [error_id=%s]", tool_name, error_id)
+    else:
+        logger.error("Tool %s failed [error_id=%s]: %s", tool_name, error_id, error)
+    try:
+        get_stream_writer()(
+            AgentActionEvent(
+                action=AgentAction.TOOL_ERROR,
+                tool_name=tool_name,
+                result=result,
+                error_id=None if result else error_id,
+            )
+        )
+    except Exception:
+        logger.warning("Failed to stream tool error for %s [error_id=%s]", tool_name, error_id, exc_info=True)
+    return error_id
 
 
 def load_schema(tool_path: str) -> dict:
@@ -51,8 +103,9 @@ def _fix_core_schema_references(ret: dict) -> dict:
 
 
 class StatusUpdateCallbackHandler(AsyncCallbackHandler):
-    def __init__(self, tool_id: str, description: Optional[str] = "", 
-                response_parser: Optional[Callable[[Any], List[str]]] = None):
+
+    def __init__(self, tool_id: str, description: Optional[str] = "",
+                response_parser: Optional[Callable[[Any], Any]] = None):
         self.tool_id = tool_id
         self.description = description
         self.response_parser = response_parser
@@ -82,21 +135,12 @@ class StatusUpdateCallbackHandler(AsyncCallbackHandler):
         return { key: value for key, value in inputs.items() if not isinstance(value, ToolRuntime) } if inputs else None
 
     async def on_tool_end(self, output: Any, **kwargs: Any) -> None:
-        result = self.response_parser(output.content) if self.response_parser else output.content[0:200] + "..."
+        result = self.response_parser(output.content) if self.response_parser else stored_status_result(output.content)
         get_stream_writer()(
             AgentActionEvent(
                 action=AgentAction.EXECUTED_TOOL,
                 tool_name=self.tool_id,
                 result=result,
-            )
-        )
-
-    async def on_tool_error(self, error: BaseException, **kwargs: Any) -> None:
-        get_stream_writer()(
-            AgentActionEvent(
-                action=AgentAction.TOOL_ERROR,
-                tool_name=self.tool_id,
-                result=[str(error)[:200] + "..."],
             )
         )
 
@@ -109,6 +153,7 @@ class AgentTool(CamelCaseModel, abc.ABC):
     _agent: Optional[Agent] = None
     _user_id: Optional[int] = None
     _config: Optional[dict] = None
+    _tool_metadata: Optional[dict] = None
     _secrets: Optional[dict] = None
     _db: Optional[AsyncSession] = None
     _thread_id: Optional[int] = None
@@ -134,6 +179,10 @@ class AgentTool(CamelCaseModel, abc.ABC):
         return cast(dict, self._config)
 
     @property
+    def tool_metadata(self) -> Optional[dict]:
+        return self._tool_metadata
+
+    @property
     def db(self) -> AsyncSession:
         return cast(AsyncSession, self._db)
 
@@ -155,7 +204,7 @@ class AgentTool(CamelCaseModel, abc.ABC):
         return {key: value for key, value in cast(dict, self._config).items() if self.config_schema.get("properties", {}).get(key, {}).get("writeOnly")}
 
     def _mask_secrets(self) -> dict:
-        return {key: _SECRET_MASK if key in self._secrets else value for key, value in cast(dict, self._config).items()}
+        return {key: _SECRET_MASK if cast(dict, self._secrets).get(key) else value for key, value in cast(dict, self._config).items()}
 
     def _get_secret(self, key: str) -> Optional[str]:
         ret = cast(dict, self._secrets).get(key)
@@ -213,7 +262,7 @@ class AgentTool(CamelCaseModel, abc.ABC):
 
     async def remove_file(self, file: File):
         raise NotImplementedError()
-    
+
     # override this method to perform some initialization that is required for using the agent tool (eg: trigger user authentication, etc)
     # this method should raise a ToolAuthRequestException if authentication is required to use the tool and the user hasn't authenticated yet
     @abc.abstractmethod
@@ -225,11 +274,20 @@ class AgentTool(CamelCaseModel, abc.ABC):
     async def build_langchain_tools(self) -> List[BaseTool]:
         pass
 
-    # this method is invoked when trying to complete authentication either by setup (when using oauth) or 
+    # override this method in tools supporting several configs per agent (ie: with a wildcard id) to expose a
+    # single set of langchain tools shared by all of their instances, instead of one set per instance
+    @classmethod
+    async def build_shared_langchain_tools(cls, instances: List['AgentTool']) -> List[BaseTool]:
+        return [langchain_tool for instance in instances for langchain_tool in await instance.build_langchain_tools()]
+
+    # this method is invoked when trying to complete authentication either by setup (when using oauth) or
     # when a user first interacts with the tool and sends the authentication token
     async def auth(self, auth_callback: ToolAuthCallback):
         raise NotImplementedError()
-    
+
+    async def sync(self) -> Optional[dict]:
+        return None
+
     # override this method to perform any cloning that is required for using the agent tool (eg: clone embeddings, etc)
     @abc.abstractmethod
     async def clone(self, agent_id: int, cloned_agent_id: int, tool_id: str, user_id: int, db: AsyncSession) -> None:

@@ -2,11 +2,19 @@ import { reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ApiService, Agent } from '@/services/api'
 
+export const agentsPageSize = 20
+
 const agentsStore = reactive({
   agents: [] as Agent[],
   currentAgent: {} as Agent,
-  async setAgents(agents: Agent[]) {
-    this.agents = agents
+  hasMoreAgents: false,
+  agentsRevision: 0,
+  // one extra agent is loaded per page to know if there's more, and duplicates are skipped on append since a recent chat can move an agent to a newer page
+  setAgents(page: Agent[], append = false) {
+    const agents = page.slice(0, agentsPageSize)
+    if (append) this.agents.push(...agents.filter((agent) => !this.agents.some((a) => a.id === agent.id)))
+    else this.agents = agents
+    this.hasMoreAgents = page.length > agentsPageSize
   },
   addAgent(agent: Agent) {
     this.agents.unshift(agent)
@@ -50,7 +58,8 @@ export function useAgentStore() {
   async function addAgent(agent: Agent) {
     if (!agentsStore.agents.find((a) => a.id === agent.id)) {
       await api.addUserAgent(agent.id)
-      agentsStore.addAgent(agent)
+      // sidebar watches this and reloads, so a pin shows up with its chats in either view, including when the list was empty
+      agentsStore.agentsRevision++
     }
   }
 
@@ -59,8 +68,8 @@ export function useAgentStore() {
     agentsStore.removeAgent(agentId)
   }
 
-  async function loadAgents() {
-    agentsStore.setAgents(await api.findUserAgents())
+  async function loadAgents(append = false) {
+    agentsStore.setAgents(await api.findUserAgents('', agentsPageSize + 1, append ? agentsStore.agents.length : 0), append)
   }
 
   function updateAgent(agentId: number) {

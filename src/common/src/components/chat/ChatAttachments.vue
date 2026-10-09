@@ -14,9 +14,9 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="flex flex-wrap" v-if="attachedFiles.length">
-    <div class="flex overflow-x-auto whitespace-nowrap" :class="[variant === 'input' ? 'px-2 pb-4' : '', attachedFiles.length >= 3 ? 'pb-3 mb-2' : '']" v-if="attachedFiles.length">
-      <div v-for="(file, idx) in attachedFiles" :key="idx" 
+  <div v-if="attachedFiles.length || $slots.leading" class="flex flex-wrap items-center" :class="variant === 'input' ? 'px-2 pb-4' : ''">
+    <slot name="leading" />
+    <div v-for="(file, idx) in attachedFiles" :key="idx"
         class="inline-flex items-center whitespace-nowrap rounded-xl bg-surface border px-3 py-1.5 mr-2">
         <IconPhoto v-if="file.contentType.startsWith('image/')" class="mr-2" />
         <IconFileText v-else class="mr-2" />
@@ -27,6 +27,5 @@ const emit = defineEmits<{
         <SimpleIcon interactive v-else-if="file.id" :icon="IconEye" @click="emit('viewFile', file)" />
         <IconLoader v-else class="animate-spin"/>
       </div>
-    </div>
   </div>
 </template>

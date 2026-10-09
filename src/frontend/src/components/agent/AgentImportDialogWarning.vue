@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { IconInfoCircleFilled, IconPackageImport } from '@tabler/icons-vue'
-import { buildToolConfigName } from '../../../../common/src/utils/toolConfig'
+import { buildToolConfigName, parseSubagentId } from '../../../../common/src/utils/toolConfig'
 import type { AgentImportResult } from '@/services/api'
 
 export interface WarningItem {
@@ -23,6 +23,12 @@ const { t } = useI18n()
 const formatToolNames = (toolNames: string[]) =>
   toolNames.map((toolName) => buildToolConfigName(toolName)).join(', ')
 
+const formatSubagentNames = (toolIds: string[]) =>
+  toolIds.map((toolId) => {
+    const id = parseSubagentId(toolId)
+    return id == null ? toolId : t('subagentName', { id })
+  }).join(', ')
+
 const warningItems = computed(() => {
   const items: WarningItem[] = []
   const result = props.result
@@ -38,6 +44,13 @@ const warningItems = computed(() => {
     items.push({
       title: t('unavailableToolsTitle'),
       message: t('unavailableToolsMessage', { tools: formatToolNames(result.unavailableTools) })
+    })
+  }
+
+  if (result.unavailableSubagents.length > 0) {
+    items.push({
+      title: t('unavailableSubagentsTitle'),
+      message: t('unavailableSubagentsMessage', { subagents: formatSubagentNames(result.unavailableSubagents) })
     })
   }
 
@@ -87,6 +100,9 @@ const warningItems = computed(() => {
     "modelReplacedMessage": "\"{model}\" isn't available in this environment, so we replaced it with the default model: {'<'}span class='bold-span'> {defaultModel}{'<'}/span>.",
     "unavailableToolsTitle": "Tools not imported",
     "unavailableToolsMessage": "These tools aren't available in this environment and were skipped: {'<'}span class='bold-span'> {tools}{'<'}/span>.",
+    "unavailableSubagentsTitle": "Subagents not imported",
+    "unavailableSubagentsMessage": "These subagents aren't visible to you and were skipped: {'<'}span class='bold-span'> {subagents}{'<'}/span>.",
+    "subagentName": "Subagent {id}",
     "authToolsTitle": "Tools that need configuration",
     "authToolsMessage": "These tools were imported, but need to be authenticated or configured before they can be used: {'<'}span class='bold-span'> {tools}{'<'}/span>.",
     "reviewChanges": "Review changes"
@@ -98,6 +114,9 @@ const warningItems = computed(() => {
     "modelReplacedMessage": "\"{model}\" no está disponible en este entorno, así que lo reemplazamos con el modelo por defecto: {'<'}span class='bold-span'> {defaultModel}{'<'}/span>.",
     "unavailableToolsTitle": "Herramientas no importadas",
     "unavailableToolsMessage": "Estas herramientas no están disponibles en este entorno y fueron omitidas: {'<'}span class='bold-span'> {tools}{'<'}/span>.",
+    "unavailableSubagentsTitle": "Subagentes no importados",
+    "unavailableSubagentsMessage": "Estos subagentes no son visibles para ti y fueron omitidos: {'<'}span class='bold-span'> {subagents}{'<'}/span>.",
+    "subagentName": "Subagente {id}",
     "authToolsTitle": "Herramientas que necesitan configuración",
     "authToolsMessage": "Estas herramientas fueron importadas, pero necesitan ser autenticadas o configuradas antes de poder usarse: {'<'}span class='bold-span'> {tools}{'<'}/span>.",
     "reviewChanges": "Revisar cambios"

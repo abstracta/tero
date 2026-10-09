@@ -59,10 +59,11 @@ class ThreadListItem(BaseThread, CamelCaseModel):
     last_message: Optional[datetime] = None
 
     @staticmethod
-    def from_thread(thread: Thread, last_message: Optional[datetime] = None, creation: Optional[datetime] = None) -> 'ThreadListItem':
+    def from_thread(thread: Thread, last_message: Optional[datetime] = None, creation: Optional[datetime] = None,
+                    agent: Optional[AgentListItem] = None) -> 'ThreadListItem':
         return ThreadListItem.model_validate(
             {**thread.model_dump(),
-             "agent": AgentListItem.from_agent(thread.agent, thread.agent.is_editable_by(thread.user)),
+             "agent": agent or AgentListItem.from_agent(thread.agent, thread.agent.is_editable_by(thread.user)),
              "creation": thread.creation if creation is None else creation,
              "last_message": last_message})
 
@@ -88,6 +89,7 @@ class ThreadMessage(CamelCaseModel, table=True):
     thread_id: int = Field(foreign_key="thread.id", index=True)
     origin: ThreadMessageOrigin
     text: str = Field(sa_column=Column(Text))
+    collapsed_name: Optional[str] = Field(default=None, max_length=50)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     stopped: bool = Field(default=False)
 
@@ -123,6 +125,7 @@ class ThreadMessagePublic(CamelCaseModel, table=False):
     thread_id: int
     origin: ThreadMessageOrigin
     text: str
+    collapsed_name: Optional[str] = None
     files: Optional[List[FileMetadata]] = None
     timestamp: datetime
     parent_id: Optional[int] = None
@@ -157,8 +160,10 @@ class AgentActionEvent(AgentEvent):
     action: AgentAction
     tool_name: Optional[str] = None
     description: Optional[str] = None
-    result: Optional[Union[List[str], str]] = None
+    result: Optional[Union[str, List[Any]]] = None
     args: Optional[dict[str, Any]] = None
+    error_id: Optional[str] = None
+    agent_name: Optional[str] = None
 
 
 class AgentFileEvent(AgentEvent):
@@ -175,3 +180,7 @@ class ThreadTranscriptionResult(CamelCaseModel):
 
 class ModelRateLimitError(Exception):
     pass
+
+
+class StatusDetailPublic(CamelCaseModel):
+    value: str

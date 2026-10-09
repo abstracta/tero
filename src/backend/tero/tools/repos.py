@@ -14,13 +14,28 @@ from .web import WebTool
 from .browser import BrowserTool
 from .sql import SqlTool
 from .azure_devops import AzureDevOpsTool
+from .codebase import CodebaseTool
+from .notion import NotionTool
+from .subagent import SubagentTool
 
 class ToolRepository:
 
     def __init__(self):
         self._tools: List[AgentTool] = [
-            DocsTool(), McpTool(), JiraTool(), BrowserTool(), GitHubTool(), YouTrackTool(),
-            ZephyrTool(), PractiTestTool(), RedmineTool(), SqlTool(), AzureDevOpsTool(),
+            DocsTool(),
+            McpTool(),
+            JiraTool(),
+            BrowserTool(),
+            GitHubTool(),
+            YouTrackTool(),
+            ZephyrTool(),
+            PractiTestTool(),
+            RedmineTool(),
+            SqlTool(),
+            AzureDevOpsTool(),
+            CodebaseTool(),
+            NotionTool(),
+            SubagentTool(),
         ]
 
         if env.web_tool_tavily_api_key or (env.web_tool_google_api_key and env.web_tool_google_custom_search_engine_id):

@@ -172,12 +172,16 @@ To create a new tool:
 9. Run the entire test suite with `devbox run tests` and `devbox run check` to verify proper type resolution in Python and avoid potential bugs.
 10. Select a proper icon for your tool. Ideally one that is provided by [Tabler Icons](https://tabler.io/icons) or at least aligns with the design.
 11. Add internationalization (i18n) strings for the configuration parameters, name of the tool, and description in [AgentToolConfigEditor.vue](src/frontend/src/components/agent/AgentToolConfigEditor.vue). You can use a Tero agent to translate texts you’re unsure about; the Tero team will also help refine texts in your PR.
-12. Add a mapping from your tool id to the proper icon in [useToolConfig.ts](src/frontend/src/composables/useToolConfig.ts).
+12. Add a mapping from your tool id to the proper icon (`toolIcons`) and default name (`defaultToolNames`) in [toolConfig.ts](src/common/src/utils/toolConfig.ts).
 13. Add a new file in [docs/guide/tools](docs/guide/tools/) for the new tool explaining what it does and how to configure it.
 14. Add proper include to the new file in [docs/guide/tools/index.md](docs/guide/tools/index.md).
 15. Test your tool and share your shiny new tool with the rest of the community by sending a pull request to this GitHub repository!
 
 Optionally, create additional Python scripts, new migrations, and any additional resources you need for your new tool.
+
+## Working with AI coding agents
+
+Agent-facing instructions live in [AGENTS.md](AGENTS.md) (read by Claude Code, Cursor and Copilot). In short: classify the task by blast radius (T1/T2/T3), write a plan with a verification section for T2 and up, run `devbox run verify` while iterating and `devbox run verify-full` before opening an MR, and keep the human gates: plan approval, MR approval, release. Changes to `AGENTS.md`, `CLAUDE.md` or `.claude/` need product owner approval.
 
 ## Conventions and best practices
 
@@ -189,3 +193,6 @@ In general we follow common programming good practices and some language specifi
 - When adding new functionality, add appropriate automated tests.
 - Prefer “Clean Code” ordering (callers before callees), keep variables and declarations near where they are used, and follow the KISS (Keep It Simple Stupid) principle.
 - Use comments to explain the “why” (when necessary), not the “what”. Use function and variable names for the “what”. Avoid comments that simply restate what the code already expresses.
+- Provide the simplest, shortest code that solves the need. Don’t over-engineer: avoid trivial methods or functions that are used only once and prefer inlining them.
+- Avoid duplicate code. Look for existing logic to reuse before writing new code.
+- Avoid “patching”. Before adding a special case, analyze the surrounding code and consider whether a more meaningful change that reuses or reshapes existing logic is the right fix.

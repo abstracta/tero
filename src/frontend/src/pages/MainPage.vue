@@ -6,11 +6,11 @@ const { showToolAuthModal, toolAuthType, toolId, submitAuth, closeAuth } = useTo
 </script>
 
 <template>
-  <PageLayout>
+  <PageLayout left-column-class="shrink-0">
     <template v-slot:left>
       <SidebarPanel />
     </template>
-    <template v-slot:right>
+    <template v-slot:center>
       <router-view />
     </template>
   </PageLayout>

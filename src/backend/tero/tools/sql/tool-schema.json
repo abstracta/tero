@@ -12,6 +12,11 @@
       "type": "string",
       "description": "SQL Server fully qualified domain name (e.g. myserver.database.windows.net)"
     },
+    "alias": {
+      "type": "string",
+      "pattern": "^$|^[a-z0-9][a-z0-9_-]{0,29}$",
+      "description": "Name used to identify this connection. Must be unique among the SQL connections of the agent. If empty, the server name is used."
+    },
     "azureTenantId": {
       "type": "string",
       "description": "Azure Active Directory Tenant ID",
@@ -30,5 +35,6 @@
     }
   },
   "required": ["dbType", "server", "azureTenantId", "azureClientId", "azureClientSecret"],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "x-oauth-redirect": true
 }

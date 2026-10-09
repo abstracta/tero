@@ -79,9 +79,9 @@ async def send_message(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Monthly usage quota exceeded")
 
     try:
-        engine = AgentEngine(thread.agent, user.id, db, store)
+        engine = AgentEngine(thread.agent, user.id, store)
         async with AsyncExitStack() as stack:
-            await engine.load_tools(stack)
+            await engine.load_tools_including_subagents(stack)
     except ToolAuthRequestException:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -112,7 +112,7 @@ async def send_message(
     complete_answer = ""
     try:
         stop_event = asyncio.Event()
-        answer_stream = AgentEngine(thread.agent, user.id, db, store).answer(
+        answer_stream = AgentEngine(thread.agent, user.id, store).answer(
             [*thread_messages, user_message], message_usage, stop_event,
         )
         async for event in answer_stream:

@@ -26,6 +26,7 @@ const props = defineProps<{
     teamUsers: User[];
     loadingUsers: boolean;
     newUsers: NewUserRow[];
+    canAssignBudgetOwner?: boolean;
 }>()
 
 const emit = defineEmits<{
@@ -38,7 +39,8 @@ const filteredUsers = computed(() => {
     return props.users.filter(user => !props.teamUsers.some(teamUser => teamUser.id === user.id) && !props.newUsers.some(newUser => newUser.username === user.username));
 })
 
-const roleOptions = ref<{ label: string, value: string }[]>([
+const roleOptions = computed<{ label: string, value: string }[]>(() => [
+    ...(props.canAssignBudgetOwner ? [{ label: t('budgetOwner'), value: Role.BUDGET_OWNER.toString() }] : []),
     { label: t('teamOwner'), value: Role.TEAM_OWNER.toString() },
     { label: t('teamMember'), value: Role.TEAM_MEMBER.toString() },
     { label: t('teamEditor'), value: Role.TEAM_EDITOR.toString() }
@@ -152,6 +154,7 @@ defineExpose({
         "userNamePlaceholder": "Enter user email",
         "noUsersFound": "No users found",
         "role": "Role",
+        "budgetOwner": "Admin",
         "teamOwner": "Leader",
         "teamMember": "Member",
         "teamEditor": "Editor",
@@ -162,6 +165,7 @@ defineExpose({
         "userNamePlaceholder": "Introduzca email de usuario",
         "noUsersFound": "No se encontraron usuarios",
         "role": "Rol",
+        "budgetOwner": "Administrador",
         "teamOwner": "Líder",
         "teamMember": "Miembro",
         "teamEditor": "Editor",

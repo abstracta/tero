@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { GLOBAL_TEAM_ID, type TeamUser, TeamRoleStatus } from '@/services/api';
-import { IconPencil, IconX } from '@tabler/icons-vue';
+import { IconPencil, IconX, IconChartBar, IconChartBarOff, IconCoin } from '@tabler/icons-vue';
 import type { MenuItem } from 'primevue/menuitem';
 import { ref, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
@@ -9,10 +9,13 @@ const { t } = useI18n();
 const props = defineProps<{
     user: TeamUser;
     teamId: number;
+    canEditBudget?: boolean;
 }>();
 const emit = defineEmits<{
     (e: 'editUserRole'): void;
+    (e: 'editBudget'): void;
     (e: 'deleteUser'): void;
+    (e: 'updateUserExcludeFromMetrics'): void;
 }>();
 const menu = ref();
 const isMenuOpen = ref(false);
@@ -26,7 +29,15 @@ const items = computed<MenuItem[]>(() => {
     let removeLabel = t('deleteInvitation');
     if (props.user.roleStatus !== TeamRoleStatus.REJECTED) {
         menuItems.push({ label: t('editRoleLabel'), tablerIcon: IconPencil, command: () => { emit('editUserRole') } });
+        if (props.canEditBudget && props.user.roleStatus === TeamRoleStatus.ACCEPTED && props.user.verified) {
+            menuItems.push({ label: t('editBudgetLabel'), tablerIcon: IconCoin, command: () => { emit('editBudget') } });
+        }
         removeLabel = t('deleteUserLabel');
+    }
+    if (props.teamId === GLOBAL_TEAM_ID && props.user.verified && props.user.roleStatus === TeamRoleStatus.ACCEPTED) {
+        const excludeLabel = props.user.excludeFromMetrics ? t('includeInMetrics') : t('excludeFromMetrics');
+        const excludeIcon = props.user.excludeFromMetrics ? IconChartBar : IconChartBarOff;
+        menuItems.push({ label: excludeLabel, tablerIcon: excludeIcon, command: () => { emit('updateUserExcludeFromMetrics') } });
     }
     if (props.user.roleStatus === TeamRoleStatus.PENDING || !props.user.verified) {
         removeLabel = t('cancelInvitation');
@@ -58,15 +69,21 @@ const handleMenuToggle = (event: Event) => {
 {
     "en": {
         "editRoleLabel": "Edit role",
+        "editBudgetLabel": "Edit budget",
         "deleteUserLabel": "Remove from team",
         "deleteInvitation": "Delete invitation",
-        "cancelInvitation": "Cancel invitation"
+        "cancelInvitation": "Cancel invitation",
+        "excludeFromMetrics": "Exclude from metrics",
+        "includeInMetrics": "Include in metrics"
     },
     "es": {
         "editRoleLabel": "Editar rol",
+        "editBudgetLabel": "Editar presupuesto",
         "deleteUserLabel": "Quitar del equipo",
         "deleteInvitation": "Eliminar invitación",
-        "cancelInvitation": "Cancelar invitación"
+        "cancelInvitation": "Cancelar invitación",
+        "excludeFromMetrics": "Excluir de métricas",
+        "includeInMetrics": "Incluir en métricas"
     }
 }
 </i18n>

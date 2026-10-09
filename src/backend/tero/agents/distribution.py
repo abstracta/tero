@@ -26,6 +26,7 @@ from ..threads.repos import ThreadRepository, ThreadMessageRepository
 from ..tools.core import AgentTool
 from ..tools.auth import ToolAuthRequestException
 from ..tools.repos import ToolRepository
+from ..tools.subagent import SubagentTool
 from ..users.domain import User
 from .domain import Agent, AgentUpdate, AgentToolConfig, AgentType, LlmTemperature, ReasoningEffort
 from .evaluators.domain import Evaluator
@@ -44,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 class AgentImportResult(CamelCaseModel):
     unavailable_tools: List[str] = []
+    unavailable_subagents: List[str] = []
     tools_requiring_authentication: List[str] = []
     unavailable_model: Optional[str] = None
     default_model: Optional[str] = None
@@ -122,6 +124,7 @@ def _format_advanced_config(agent: Agent) -> dict:
     config = {}
     if agent.agent_type == AgentType.DEEP_AGENT:
         config["Agent mode"] = "Advanced"
+        config["Persistent memory"] = "Enabled" if agent.memory_enabled else "Disabled"
     if agent.is_protected:
         config["Protected configuration"] = "Yes"
     if agent.recursion_limit != 20:
@@ -130,11 +133,14 @@ def _format_advanced_config(agent: Agent) -> dict:
 
 
 def _format_prompt(prompt: AgentPrompt) -> dict:
-    return {
+    formatted = {
         "name": prompt.name,
         "content": prompt.content,
-        "visibility": "Public" if prompt.shared else "Private"
+        "visibility": "Public" if prompt.shared else "Private",
     }
+    if prompt.collapsed:
+        formatted["collapsed"] = "Yes"
+    return formatted
 
 
 def _format_tool(tool: ToolInfo) -> dict:
@@ -204,10 +210,11 @@ async def update_agent_from_zip(agent: Agent, zip_content: bytes, user: User, db
             tools, unavailable_tools = await _find_tools(parsed_tools)
             unavailable_model, default_model = await _update_agent(agent, parsed, zip_file, root_folder, user, db)
             await _update_prompts(agent.id, parsed.get('conversation_starters', []), parsed.get('user_prompts', []), user.id, db)
-            auth_required_tools = await _update_tools(agent, parsed_tools, tools, zip_file, root_folder, user, db, background_tasks)
+            auth_required_tools, unavailable_subagents = await _update_tools(agent, parsed_tools, tools, zip_file, root_folder, user, db, background_tasks)
             await _update_tests(agent.id, parsed.get('tests', []), user.id, db)
             return AgentImportResult(
                 unavailable_tools=unavailable_tools,
+                unavailable_subagents=unavailable_subagents,
                 tools_requiring_authentication=auth_required_tools,
                 unavailable_model=unavailable_model,
                 default_model=default_model if unavailable_model else None
@@ -291,6 +298,9 @@ def _apply_imported_advanced_config(update: AgentUpdate, advanced_config: Dict[s
     if advanced_config.get("Agent mode", "").strip().lower() == "advanced":
         update.agent_type = AgentType.DEEP_AGENT
 
+    memory_setting = str(advanced_config.get("Persistent memory", "Disabled")).strip().lower()
+    update.memory_enabled = memory_setting != "disabled"
+
     update.is_protected = False
     if user.is_global_owner() and advanced_config.get("Protected configuration", "").strip().lower() == "yes":
         update.is_protected = True
@@ -330,12 +340,20 @@ async def _add_prompt(agent_id: int, user_id: int, p: Dict[str, Any], db: AsyncS
             name=p["name"],
             content=p["content"],
             shared=shared or starter,
-            starter=starter
+            starter=starter,
+            collapsed=p.get("collapsed") == "Yes"
         ))
 
 
-async def _update_tools(agent: Agent, parsed_tools: List[Dict[str, Any]], tools: Dict[str, AgentTool], zip_file: ZipFile, root_folder: str, user: User, db: AsyncSession, background_tasks: BackgroundTasks) -> List[str]:
-    tools_dict = {_parse_tool_id(t): t for t in parsed_tools if _parse_tool_id(t) in tools}
+async def _update_tools(agent: Agent, parsed_tools: List[Dict[str, Any]], tools: Dict[str, AgentTool], zip_file: ZipFile, root_folder: str, user: User, db: AsyncSession, background_tasks: BackgroundTasks) -> tuple[List[str], List[str]]:
+    parsed_by_id = {_parse_tool_id(t): t for t in parsed_tools if _parse_tool_id(t) in tools}
+    unavailable_subagents = []
+    tools_dict = {}
+    for tool_id, parsed in parsed_by_id.items():
+        if await _is_subagent_not_visible(tool_id, user, db):
+            unavailable_subagents.append(tool_id)
+        else:
+            tools_dict[tool_id] = parsed
     tool_config_repo = AgentToolConfigRepository(db)
     await tool_config_repo.delete_drafts(agent.id)
     existing_tools = {tc.tool_id: tc for tc in await tool_config_repo.find_by_agent_id(agent.id)}
@@ -353,7 +371,15 @@ async def _update_tools(agent: Agent, parsed_tools: List[Dict[str, Any]], tools:
             if await _configure_new_tool(tool_id, config, agent, tools[tool_id], zip_file, root_folder, user, db, background_tasks):
                 auth_required_tools.append(tool_id)
 
-    return auth_required_tools
+    return auth_required_tools, unavailable_subagents
+
+
+async def _is_subagent_not_visible(tool_id: str, user: User, db: AsyncSession) -> bool:
+    subagent_id = SubagentTool.parse_subagent_id(tool_id)
+    if subagent_id is None:
+        return False
+    subagent = await AgentRepository(db).find_by_id(subagent_id)
+    return subagent is None or not subagent.is_visible_by(user)
 
 
 async def _remove_tool(tc: AgentToolConfig, user_id: int, db: AsyncSession):
@@ -427,6 +453,8 @@ def _parse_config_value(value: Any, schema: dict, key: str, tool_id: str) -> Any
         return value
     elif schema_type == "boolean":
         return value.lower() == "true"
+    elif schema_type == "integer":
+        return int(value)
     elif schema_type == "array":
         item_type = schema["items"]["type"]
         if item_type == "string":

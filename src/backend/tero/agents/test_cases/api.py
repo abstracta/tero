@@ -16,6 +16,7 @@ from ...core.auth import get_current_user
 from ...core.repos import get_db
 from ...users.domain import User
 from ...threads.agents_store import get_store
+from ...threads.api import to_public_message
 from ...threads.domain import Thread, ThreadMessage, ThreadMessageOrigin, ThreadMessagePublic, MAX_THREAD_NAME_LENGTH
 from ...threads.engine import AgentEngine
 from ...threads.repos import ThreadMessageRepository, ThreadRepository
@@ -158,9 +159,9 @@ async def run_test_suite(
 
     # Initialize engine to trigger any tool authentication requirements before creating suite run
     try:
-        engine = AgentEngine(agent, user.id, db, store)
+        engine = AgentEngine(agent, user.id, store)
         async with AsyncExitStack() as stack:
-            await engine.load_tools(stack)
+            await engine.load_tools_including_subagents(stack)
     except ToolAuthRequestException as e:
         raise build_tool_auth_request_http_exception(e.request)
 
@@ -305,7 +306,7 @@ async def get_test_suite_run_result_messages(
     result_id: int,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)]
-) -> List[ThreadMessage]:
+) -> List[ThreadMessagePublic]:
     await _find_test_suite_run(suite_run_id, agent_id, user, db)
 
     results_repo = TestCaseResultRepository(db)
@@ -314,7 +315,7 @@ async def get_test_suite_run_result_messages(
     if result is None or result.thread_id is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
-    return await ThreadMessageRepository(db).find_by_thread_id(result.thread_id)
+    return [_to_test_case_message(msg) for msg in await ThreadMessageRepository(db).find_by_thread_id(result.thread_id)]
 
 
 TEST_CASE_PATH = f"{TEST_CASES_PATH}/{{test_case_id}}"
@@ -383,14 +384,20 @@ async def delete_test_case(agent_id: int, test_case_id: int, user: Annotated[Use
     await TestCaseRepository(db).delete(test_case)
 
 
+def _to_test_case_message(message: ThreadMessage) -> ThreadMessagePublic:
+    public = to_public_message(message)
+    public.files = public.files or []
+    return public
+
+
 TEST_CASE_MESSAGES_PATH = f"{TEST_CASE_PATH}/messages"
 
 
 @router.get(TEST_CASE_MESSAGES_PATH, response_model=List[ThreadMessagePublic])
 async def find_messages(agent_id: int, test_case_id: int, user: Annotated[User, Depends(get_current_user)],
-        db: Annotated[AsyncSession, Depends(get_db)]) -> List[ThreadMessage]:
+        db: Annotated[AsyncSession, Depends(get_db)]) -> List[ThreadMessagePublic]:
     test_case = await find_test_case_by_id(test_case_id, agent_id, user, db)
-    return await ThreadMessageRepository(db).find_by_thread_id(test_case.thread_id)
+    return [_to_test_case_message(msg) for msg in await ThreadMessageRepository(db).find_by_thread_id(test_case.thread_id)]
 
 
 @router.post(TEST_CASE_MESSAGES_PATH, response_model=ThreadMessagePublic)

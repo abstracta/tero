@@ -21,10 +21,11 @@ async def generate_agent_field(agent: Agent, field: AutomaticAgentField, user_id
         response = await llm.ainvoke([HumanMessage(prompt)])
         response = cast(AIMessage, response)
         message_usage.increment_with_metadata(response.usage_metadata, model)
+        content = response.text
         max_length = _get_field_max_length(field)
         if max_length:
-            response.content = response.content[:max_length]
-        return cast(str, response.content)
+            content = content[:max_length]
+        return content
     finally:
         await UsageRepository(db).add(message_usage)
 

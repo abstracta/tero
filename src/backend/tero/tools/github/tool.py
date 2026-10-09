@@ -8,7 +8,7 @@ from mcp.client.session import ClientSession
 from pydantic import BaseModel, Field
 
 from ...ai_models import ai_factory
-from ..core import load_schema
+from ..core import UserFacingToolError, load_schema
 from ..mcp_tool import AuthType, BaseMcpTool
 
 
@@ -121,14 +121,14 @@ class GitHubTool(BaseMcpTool):
 
         async def create_report(owner: str, repo: str, id: str) -> str:
             if not actions_get_fn or not get_job_logs_fn or not actions_list_fn:
-                raise ValueError("Missing tools")
+                raise RuntimeError("Missing tools")
 
             workflow_run_result = await actions_get_fn(
                 method="get_workflow_run", owner=owner, repo=repo, resource_id=id
             )
             workflow_run = json.loads(workflow_run_result[0])
             if not workflow_run:
-                raise ValueError("No workflow run found")
+                raise UserFacingToolError("No workflow run found")
 
             workflow_run_id = str(workflow_run.get("id"))
             jobs_result = await actions_list_fn(
@@ -209,7 +209,7 @@ class GitHubTool(BaseMcpTool):
                 )
             ]
         )
-        return cast(str, cast(AIMessage, ret).content)
+        return cast(AIMessage, ret).text
 
     def _create_workflow_runs_reduced(self, tools_by_name: dict[str, BaseTool]) -> BaseTool:
         actions_list_fn = self._get_structured_tool("actions_list", tools_by_name)
@@ -223,7 +223,7 @@ class GitHubTool(BaseMcpTool):
             workflow_runs_filter: Optional[WorkflowRunsFilter] = None,
         ) -> str:
             if not actions_list_fn:
-                raise ValueError("Missing tools")
+                raise RuntimeError("Missing tools")
 
             kwargs: dict[str, Any] = {
                 "method": "list_workflow_runs",

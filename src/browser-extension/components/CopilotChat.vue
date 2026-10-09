@@ -105,6 +105,7 @@ const adjustMessagesScroll = async () => {
           :is-answering="!!(lastMessage && !lastMessage.isComplete)"
           :enable-prompts="true"
           :shareable-prompts="false"
+          :insert-prompt-as-text="true"
           @send="emit('userMessage', inputText)"
           @stop="emit('stopResponse')"/>
       </div>

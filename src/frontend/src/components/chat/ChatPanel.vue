@@ -2,21 +2,23 @@
 import { ref, onMounted, reactive, watch, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n'
-import { ApiService, Agent, ThreadMessageOrigin, ThreadMessage, ThreadMessagePart, HttpError, findManifest, TeamRoleStatus, Role, GLOBAL_TEAM_ID, UserProfile } from '@/services/api';
+import { ApiService, Agent, ThreadMessageOrigin, ThreadMessage, ThreadMessagePart, HttpError, AgentNotFoundError, httpErrorBody, findManifest, TeamRoleStatus, EDITOR_ROLES, GLOBAL_TEAM_ID, UserProfile } from '@/services/api';
 import { useChatStore } from '@/composables/useChatStore';
 import { useAgentStore } from '@/composables/useAgentStore';
 import { useBudgetStore } from '@/composables/useBudgetStore';
 import { useErrorHandler } from '@/composables/useErrorHandler';
 import { ChatUiMessage, type StatusUpdate } from '@tero/common/components/chat/ChatMessage.vue';
-import { generateChatHtml, downloadChatHtml } from '@tero/common/utils/chatExport.js';
+import { generateChatHtml, downloadChatHtml, captureChartImages } from '@tero/common/utils/chatExport.js';
 import { useAgentPromptStore } from '@/composables/useAgentPromptStore';
 import ChatPanelHeader from './ChatPanelHeader.vue';
+import ThoughtProcessPanel from './ThoughtProcessPanel.vue';
 import { handleToolAuthRequestsIn } from '@/services/toolAuth';
 import { AuthenticationError } from '@tero/common/utils/toolAuth.js';
 import { UserFeedback, AgentPrompt, UploadedFile, FileStatus } from '../../../../common/src/utils/domain';
 import ChatInput from '../../../../common/src/components/chat/ChatInput.vue';
 import ChatStarters from '../../../../common/src/components/chat/ChatStarters.vue';
 import { loadUserProfile } from '@/composables/useUserProfile';
+import { useSidePanel } from '@/composables/useSidePanel';
 
 const props = defineProps({
   threadId: {
@@ -33,12 +35,17 @@ const emit = defineEmits(['newChat', 'selectChat']);
 const { t } = useI18n();
 const router = useRouter();
 const api = new ApiService();
-const { chatsStore, updateChat, refreshChat, newChat, setCurrentChat } = useChatStore();
+const { chatsStore, updateChat, refreshChat, newChat, setCurrentChat, refreshSidebar, recoverFromAgentNotFound, clearThreadUiState } = useChatStore();
 const threadUiStates = chatsStore.threadUiStates
 const { agentsStore, updateAgent, setCurrentAgent } = useAgentStore();
 const { agentsPromptStore, loadAgentPrompts, removePrompt, updatePrompt, newPrompt } = useAgentPromptStore();
 const { updateBudget } = useBudgetStore();
 const { handleError } = useErrorHandler();
+const { togglePanel } = useSidePanel();
+
+const handleOpenThoughtProcess = (message: ChatUiMessage) => {
+  togglePanel(ThoughtProcessPanel, { source: message })
+}
 
 const messages = ref<ChatUiMessage[]>([]);
 const chatsContainerRef = ref<HTMLElement | null>(null);
@@ -53,8 +60,10 @@ const showPastChats = ref<boolean>(false);
 const testCaseLoading = ref(false);
 const currentUser = ref<UserProfile | undefined>(undefined)
 const disablePublishGlobal = ref(false)
+const maxFileSizeMb = ref<number>()
 
 const chat = computed(() => chatsStore.currentChat);
+const readOnly = computed(() => !!chat.value?.agent.readOnly);
 
 const starterPrompts = computed(() =>
   agentsPromptStore.prompts.filter(p => p.starter)
@@ -64,7 +73,7 @@ const shareablePrompts = computed(() => {
   const isOwnerOrEditor = currentUser.value?.teams.some(t =>
     t.status === TeamRoleStatus.ACCEPTED &&
     t.id === GLOBAL_TEAM_ID &&
-    (t.role === Role.TEAM_OWNER || t.role === Role.TEAM_EDITOR)
+    EDITOR_ROLES.includes(t.role)
   ) ?? false
   return !disablePublishGlobal.value || !agentOnGlobalTeam || isOwnerOrEditor
 })
@@ -75,6 +84,7 @@ onMounted(async () => {
   const [user, manifest] = await Promise.all([loadUserProfile(), findManifest()])
   currentUser.value = user ?? undefined
   disablePublishGlobal.value = manifest.disablePublishGlobal
+  maxFileSizeMb.value = manifest.maxFileSizeMb
   contactEmail.value = manifest.contactEmail
   await loadChatData(props.threadId);
 })
@@ -133,7 +143,7 @@ function mapThreadMessageToChatUi(
   const { text, isSuccess } = mapThreadMessageTextAndStatus(threadMsg)
   const files = threadMsg.files || [] as UploadedFile[]
   const stopped = threadMsg.stopped || threadMsg.text === 'ERROR_INTERRUPTED'
-  const uiMsg = new ChatUiMessage(text, files, threadMsg.origin === ThreadMessageOrigin.USER, true, isSuccess, [], parent, threadMsg.id, threadMsg.minutesSaved, threadMsg.feedbackText, threadMsg.hasPositiveFeedback, stopped, threadMsg.statusUpdates);
+  const uiMsg = new ChatUiMessage(text, files, threadMsg.origin === ThreadMessageOrigin.USER, true, isSuccess, threadMsg.collapsedName, [], parent, threadMsg.id, threadMsg.minutesSaved, threadMsg.feedbackText, threadMsg.hasPositiveFeedback, stopped, threadMsg.statusUpdates);
   for (const childThread of threadMsg.children) {
     const childUi = mapThreadMessageToChatUi(childThread, uiMsg)
     uiMsg.children.push(childUi)
@@ -152,6 +162,14 @@ function mapThreadMessageTextAndStatus(threadMsg: ThreadMessage): { text: string
 
   if (threadMsg.text === 'ERROR_MODEL_RATE_LIMIT') {
     return { text: t('modelRateLimitExceeded'), isSuccess: false }
+  }
+
+  if (threadMsg.text === 'ERROR_OWNER_CONFIGURED') {
+    return { text: t('ownerConfiguredToolAuth'), isSuccess: false }
+  }
+
+  if (threadMsg.text === 'ERROR_CODEBASE_NOT_SYNCED') {
+    return { text: t('codebaseNotSynced'), isSuccess: false }
   }
 
   if (threadMsg.text === 'ERROR_GENERIC') {
@@ -177,6 +195,18 @@ watch(() => props.threadId, async (newThreadId) => {
   attachedFiles.value = [];
   agentsPromptStore.prompts = [];
   await loadChatData(newThreadId);
+});
+
+watch(() => chat.value?.agent, async (agent) => {
+  if (!agent?.readOnly) return;
+  if (!props.editingAgent) setCurrentAgent(agent);
+  try {
+    await loadAgentPrompts(agent.id);
+    await chatInputRef.value?.reloadPrompts();
+  } catch (error) {
+    handleError(error);
+  }
+  refreshSidebar().catch(handleError);
 });
 
 watch(messages, ()=>{
@@ -216,9 +246,7 @@ function buildMessageTreeIndexes(
   return showMessageIndexes;
 }
 
-const onSendUserMessage = async () => {
-  const text = inputText.value;
-  const files = attachedFiles.value;
+const onSendUserMessage = async (text: string, files: UploadedFile[], collapsedName?: string) => {
   attachedFiles.value = [];
 
   const { message } = getSelectedBranch(messages.value, showMessageIndexes.value)!;
@@ -229,17 +257,31 @@ const onSendUserMessage = async () => {
     message.parent.id != null &&
     !(message.stopped && !message.text)
   ) {
-    await handleEditMessage(message.parent.id, text, files);
+    await handleEditMessage(message.parent.id, text, files, collapsedName);
     return;
   }
 
-  await sendUserMessage(text, files);
+  await sendUserMessage(text, files, undefined, collapsedName);
 };
 
-const sendUserMessage = async (text:string, files: UploadedFile[] = [], editMessageId?: number)=>{
+const beforeSend = async () => {
+  const thread = chat.value
+  if (!thread) return false
+  try {
+    await updateChat(thread)
+    if (chat.value?.id !== thread.id || readOnly.value) return false
+    updateAgent(thread.agent.id)
+    return true
+  } catch (error) {
+    await handleError(error)
+    return false
+  }
+}
+
+const sendUserMessage = async (text:string, files: UploadedFile[] = [], editMessageId?: number, collapsedName?: string)=>{
   const activeThreadId = chat.value!.id
   setThreadStreaming(activeThreadId, true)
-  const userUIMessage = ChatUiMessage.userMessage(text, files);
+  const userUIMessage = ChatUiMessage.userMessage(text, files, collapsedName);
   const parentMessageId = appendMessage(userUIMessage, editMessageId)
   const answerMsg = reactive(ChatUiMessage.agentMessage(undefined))
   userUIMessage.addChild(answerMsg)
@@ -251,20 +293,23 @@ const sendUserMessage = async (text:string, files: UploadedFile[] = [], editMess
   }
   answerMsg.addStatusUpdate(initialStatusUpdate)
 
-  await updateChat(chat.value!)
-  await updateAgent(chat.value!.agent.id)
   try {
     await handleToolAuthRequestsIn(async () => {
-      const answer = await api.sendMessage(activeThreadId, text, files, parentMessageId, props.editingAgent);
+      const answer = await api.sendMessage(activeThreadId, text, files, parentMessageId, props.editingAgent, collapsedName);
       scrollToLastChatMessage();
       await processAnswer(answer, answerMsg, userUIMessage, activeThreadId)
     }, api)
   } catch (e) {
-    await processAnswerError(e, answerMsg, userUIMessage)
+    if (e instanceof AgentNotFoundError) {
+      await recoverFromAgentNotFound(activeThreadId)
+      if (chat.value?.id === activeThreadId) await loadChatData(activeThreadId)
+    } else {
+      await processAnswerError(e, answerMsg, userUIMessage)
+    }
   } finally {
     answerMsg.isComplete = true
     setThreadStreaming(activeThreadId, false)
-    delete threadUiStates[activeThreadId]
+    clearThreadUiState(activeThreadId)
     await updateBudget()
   }
 }
@@ -368,10 +413,13 @@ const processAnswer = async (
         const statusUpdate: StatusUpdate = {
           action: part.status.action,
           toolName: part.status.toolName,
+          agentName: part.status.agentName,
           description: part.status.description,
           args: part.status.args,
+          argsPath: part.status.argsPath,
           step: part.status.step,
           result: part.status.result,
+          errorId: part.status.errorId,
           timestamp: new Date()
         }
         answerMsg.addStatusUpdate(statusUpdate)
@@ -392,12 +440,16 @@ const flushStreamBuffer = (buffer: string, answerMsg: ChatUiMessage): string => 
 const processAnswerError = async (e: unknown, answerMsg: ChatUiMessage, userUIMessage: ChatUiMessage) => {
   const contactEmail = (await findManifest()).contactEmail
   let text = ""
-  if (e instanceof HttpError && e.body === 'recursionLimitExceeded') {
+  if (e instanceof HttpError && httpErrorBody(e) === 'recursionLimitExceeded') {
     text = t('recursionLimitExceeded')
-  } else if (e instanceof HttpError && e.status === 429 && (e.body?.includes?.('quotaExceeded') || e.message.includes('quotaExceeded'))) {
+  } else if (e instanceof HttpError && e.status === 429 && httpErrorBody(e) === 'quotaExceeded') {
     text = t('quotaExceeded', { contactEmail })
-  } else if (e instanceof HttpError && e.body === 'modelRateLimitExceeded') {
+  } else if (e instanceof HttpError && httpErrorBody(e) === 'modelRateLimitExceeded') {
     text = t('modelRateLimitExceeded')
+  } else if (e instanceof HttpError && httpErrorBody(e) === 'ownerConfiguredToolAuth') {
+    text = t('ownerConfiguredToolAuth')
+  } else if (e instanceof HttpError && httpErrorBody(e) === 'codebaseNotSynced') {
+    text = t('codebaseNotSynced')
   } else if (e instanceof AuthenticationError) {
     text = t(e.errorCode)
   } else {
@@ -435,9 +487,9 @@ const stopResponse = async () => {
   }
 }
 
-const handleEditMessage = async (messageId:number, text:string, files: UploadedFile[] = []) => {
+const handleEditMessage = async (messageId:number, text:string, files: UploadedFile[] = [], collapsedName?: string) => {
   const {message} = findMessageById(messageId)!;
-  await sendUserMessage(text, files, message.id);
+  await sendUserMessage(text, files, message.id, collapsedName);
 }
 
 const handleOnSelectMessageBranch = (depth:number, index:number)=>{
@@ -465,6 +517,7 @@ const handleMessageFeedbackChange = async (messageId: number, feedback?: UserFee
 }
 
 const onNewChat = async () => {
+  if (readOnly.value) return;
   if (props.editingAgent) {
     emit('newChat');
     return
@@ -499,15 +552,7 @@ const handleCreateTestCase = async () => {
 
 const handleExportChat = async () => {
   try {
-    const chartImages: string[] = []
-    const chartDivs = chatsContainerRef.value?.querySelectorAll('.echarts')
-    if (chartDivs?.length) {
-      const echarts = await import('echarts')
-      chartDivs.forEach(div => {
-        const instance = echarts.getInstanceByDom(div as HTMLElement)
-        if (instance) chartImages.push(instance.getDataURL({ type: 'png', pixelRatio: 2 }))
-      })
-    }
+    const chartImages = await captureChartImages(chatsContainerRef.value)
     const { message } = getSelectedBranch(messages.value, showMessageIndexes.value)
     const branch: ChatUiMessage[] = []
     for (let m = message; m; m = m.parent) branch.unshift(m)
@@ -556,25 +601,32 @@ const handleExportChat = async () => {
           <div class="flex flex-col">
             <ChatMessagesList
               :is-editing-agent="editingAgent"
+              :read-only="readOnly"
+              :before-send="beforeSend"
               :depth="0"
               :show-message-indexes="showMessageIndexes"
               :messages="messages"
               :actions-enabled="!streamingResponse"
               :feedback-loading-message-id="feedbackLoadingMessageId"
+              :max-file-size-mb="maxFileSizeMb"
               @prompt-create="chatInputRef?.createPromptFromMessage"
               @edit-message="handleEditMessage"
               @select-message-branch="handleOnSelectMessageBranch"
               @feedback-change="handleMessageFeedbackChange"
               @view-file="handleViewFile"
+              @open-detail="handleOpenThoughtProcess"
             />
           </div>
         </div>
-        <ChatStarters v-if="messages.length === 0 && starterPrompts.length > 0" :prompts-starters="starterPrompts" :chat-input-ref="chatInputRef!" />
+        <ChatStarters v-if="!readOnly && messages.length === 0 && starterPrompts.length > 0" :prompts-starters="starterPrompts" :chat-input-ref="chatInputRef!" />
       </div>
       <ChatInput
+        v-if="!readOnly"
         v-model="inputText"
         ref="chatInputRef"
         :initial-files="attachedFiles"
+        :before-send="beforeSend"
+        :max-file-size-mb="maxFileSizeMb"
         :chat="{
           supportsStopResponse: () => true,
           findPrompts: async () => agentsPromptStore.prompts,
@@ -592,6 +644,7 @@ const handleExportChat = async () => {
         @files-change="handleFileChange"
         @stop="stopResponse">
       </ChatInput>
+      <UnavailableAgentNotice v-else :prompts="agentsPromptStore.prompts" />
     </div>
   </FlexCard>
 </template>
@@ -602,19 +655,23 @@ const handleExportChat = async () => {
       "authenticationWindowBlocked": "The authentication popup could not be opened. Please check that popups are allowed for this site and try again.",
       "authenticationCancelled": "The authentication was cancelled. Please, try again and complete the authentication to use this agent.",
       "authenticationAccessDenied": "The authentication was denied by the server. Please verify that you actually have the permissions necessary to use it.",
+      "ownerConfiguredToolAuth": "A tool configured by the agent owner is no longer valid. The agent owner needs to update it in the agent settings.",
       "agentAnswerError": "I can't help with that message. Edit it or send a new one. If the problem continues, [contact the support team](mailto:{contactEmail}?subject=Question%20issue)",
       "quotaExceeded": "You have reached the monthly usage quota. Contact [support](mailto:{contactEmail}?subject=Tero%20Monthly%20Limit) to increase your monthly quota or wait for the next month.",
       "recursionLimitExceeded": "The step limit for this response was reached. \n Try a shorter task or break your request into smaller parts. You can review the thought process to improve the use of the agent and avoid steps that you identify as unnecessary. \n To increase the limit, go to the agent settings and adjust the thought process steps limit.",
-      "modelRateLimitExceeded": "The AI model is currently experiencing high demand. Please try again in a few moments."
+      "modelRateLimitExceeded": "The AI model is currently experiencing high demand. Please try again in a few moments.",
+      "codebaseNotSynced": "An error occurred. Go to the agent settings and sync the Codebase tool."
     },
     "es": {
       "authenticationWindowBlocked": "No se pudo abrir la ventana de autenticación. Por favor, verifica que las ventanas emergentes estén permitidas para este sitio y vuelve a intentarlo.",
       "authenticationCancelled": "La autenticación fue cancelada. Por favor, inténtelo de nuevo y complete la autenticación para usar este agente o esta herramienta.",
       "authenticationAccessDenied": "La autenticación fue denegada por el servidor. Por favor, verifica que tengas los permisos necesarios para usarlo.",
+      "ownerConfiguredToolAuth": "Una herramienta configurada por el dueño del agente ya no es válida. El dueño tiene que actualizarla en la configuración del agente.",
       "agentAnswerError": "No puedo ayudarte con ese mensaje. Probá editarlo o enviar uno nuevo. Si el problema continúa, podés [contactar al equipo de soporte](mailto:{contactEmail}?subject=Question%20issue)",
       "quotaExceeded": "Ha alcanzado la cuota de uso mensual. Contacte a [soporte](mailto:{contactEmail}?subject=Tero%20Monthly%20Limit) para aumentar su cuota mensual o espere al próximo mes.",
       "recursionLimitExceeded": "Se alcanzó el límite de pasos de esta respuesta. \n Intenta con una tarea más corta o divide la solicitud en partes más pequeñas. Puedes revisar el proceso de pensamiento para mejorar el uso del agente y evitar pasos que identifiques que no sean necesarios. \n Para aumentar el límite, ve a la configuración del agente y ajusta el límite de pasos del proceso de pensamiento.",
-      "modelRateLimitExceeded": "El modelo de IA está experimentando alta demanda en este momento. Por favor, intentá de nuevo en unos instantes."
+      "modelRateLimitExceeded": "El modelo de IA está experimentando alta demanda en este momento. Por favor, intentá de nuevo en unos instantes.",
+      "codebaseNotSynced": "Ocurrió un error. Ve a la configuración del agente y sincronizá la herramienta Codebase."
     }
   }
 </i18n>

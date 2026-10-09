@@ -34,4 +34,4 @@ async def list_agents(
     """
     repo = AgentRepository(db)
     agents = await repo.find_user_agents(text, user)
-    return [McpAgent(id=a.id, name=a.name, description=a.description) for a in agents]
+    return [McpAgent(id=a.id, name=a.name, description=a.description) for a in agents if not a.read_only]

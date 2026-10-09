@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
-import { IconDots, IconLogout, IconMoon, IconSun } from '@tabler/icons-vue';
+import { IconDots, IconLogout, IconMessages, IconMoon, IconSun } from '@tabler/icons-vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useTheme, UiTheme } from '@/composables/useTheme';
+import { useSidebar } from '@/composables/useSidebar';
 import auth from '@/services/auth';
 
 const { t } = useI18n();
 const router = useRouter();
 const { theme, toggleTheme } = useTheme();
+const { isGroupedViewEnabled, setGroupedViewEnabled } = useSidebar();
 
 const menu = ref();
 const isMenuOpen = ref(false);
@@ -20,6 +22,7 @@ onMounted(async () => {
 });
 
 const currentThemeLabel = computed(() => theme.value === UiTheme.DARK ? t('dark') : t('light'));
+const groupedViewLabel = computed(() => isGroupedViewEnabled.value ? t('grouped') : t('list'));
 
 const handleCloseMenu = () => {
   isMenuOpen.value = false;
@@ -27,6 +30,10 @@ const handleCloseMenu = () => {
 
 const handleMenuToggle = (event: Event) => {
   menu.value.toggle(event);
+};
+
+const toggleGroupedView = () => {
+  setGroupedViewEnabled(!isGroupedViewEnabled.value);
 };
 
 const logout = () => {
@@ -65,7 +72,7 @@ const logout = () => {
     >
       <template #start>
         <div class="px-2 py-2">
-          <button 
+          <button
             @click="toggleTheme"
             class="flex items-center justify-between w-full px-2 py-1.5 cursor-pointer hover:bg-surface-muted rounded-md transition-colors"
           >
@@ -74,11 +81,19 @@ const logout = () => {
               <span class="text-sm">{{ t('themeLabel') }}: {{ currentThemeLabel }}</span>
             </div>
           </button>
+
+          <button
+            @click="toggleGroupedView"
+            class="flex items-center justify-between w-full px-2 py-1.5 cursor-pointer hover:bg-surface-muted rounded-md transition-colors">
+            <div class="flex items-center gap-2">
+              <IconMessages size="20" />
+              <span class="text-sm">{{ t('chats') }}: {{ groupedViewLabel }}</span>
+            </div>
+          </button>
           
           <button 
             @click="logout"
-            class="flex items-center gap-2 w-full px-2 py-1.5 cursor-pointer hover:bg-surface-muted rounded-md transition-colors"
-          >
+            class="flex items-center gap-2 w-full px-2 py-1.5 cursor-pointer hover:bg-surface-muted rounded-md transition-colors">
             <IconLogout size="20" />
             <span class="text-sm">{{ t('logout') }}</span>
           </button>
@@ -94,6 +109,9 @@ const logout = () => {
     "themeLabel": "Theme",
     "light": "Light",
     "dark": "Dark",
+    "chats": "Chats",
+    "grouped": "Grouped",
+    "list": "List",
     "logout": "Log out",
     "user": "User"
   },
@@ -101,6 +119,9 @@ const logout = () => {
     "themeLabel": "Tema",
     "light": "Claro",
     "dark": "Oscuro",
+    "chats": "Chats",
+    "grouped": "Agrupados",
+    "list": "Lista",
     "logout": "Cerrar sesión",
     "user": "Usuario"
   }

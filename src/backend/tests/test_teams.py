@@ -4,7 +4,7 @@ from .common import *
 
 from tero.agents.api import AGENTS_PATH
 from tero.teams.api import TEAM_USER_PATH, TEAM_USERS_PATH, TEAMS_PATH, TEAM_PATH
-from tero.teams.domain import Team, Role, TeamCreate, TeamRoleStatus, TeamUpdate, TeamUser
+from tero.teams.domain import Team, Role, TeamCreate, TeamRole, TeamRoleStatus, TeamUpdate, TeamUser
 from tero.users.api import CURRENT_USER_PATH, CURRENT_USER_TEAM_PATH
 from tero.users.domain import UserProfile, PublicTeamRole
 
@@ -161,6 +161,30 @@ async def test_update_user_role_in_global_team(client: AsyncClient):
     assert_response(user_resp, [TeamUser(id=OTHER_USER_ID, name="Jane Doe", username="test2", role=Role.TEAM_MEMBER, role_status=TeamRoleStatus.ACCEPTED, verified=True),
                                 TeamUser(id=USER_ID, name="John Doe", username="test", role=Role.TEAM_OWNER, role_status=TeamRoleStatus.ACCEPTED, verified=True),
                                 TeamUser(id=5, name="John Doe 5", username="test5", role=Role.TEAM_OWNER, role_status=TeamRoleStatus.ACCEPTED, verified=True)])
+
+
+async def test_assign_budget_owner_not_authorized(client: AsyncClient):
+    resp = await _send_invitation(client, GLOBAL_TEAM_ID, 5, Role.BUDGET_OWNER)
+    assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+
+async def test_assign_budget_owner_to_non_global_team(client: AsyncClient, override_user_role: Callable[[Role], None]):
+    override_user_role(Role.BUDGET_OWNER)
+    resp = await _send_invitation(client, 2, 5, Role.BUDGET_OWNER)
+    assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+
+async def test_assign_budget_owner_to_global_team(client: AsyncClient, override_user_role: Callable[[Role], None]):
+    override_user_role(Role.BUDGET_OWNER)
+    resp = await _send_invitation(client, GLOBAL_TEAM_ID, 5, Role.BUDGET_OWNER)
+    assert resp.status_code == status.HTTP_200_OK
+
+
+async def test_update_budget_owner_role_not_authorized(client: AsyncClient, session: AsyncSession):
+    session.add(TeamRole(user_id=5, team_id=GLOBAL_TEAM_ID, role=Role.BUDGET_OWNER, status=TeamRoleStatus.ACCEPTED))
+    await session.commit()
+    resp = await client.put(TEAM_USER_PATH.format(team_id=GLOBAL_TEAM_ID, user_id=5), json={"role": Role.TEAM_OWNER})
+    assert resp.status_code == status.HTTP_403_FORBIDDEN
 
 
 async def test_delete_user_from_team(client: AsyncClient):

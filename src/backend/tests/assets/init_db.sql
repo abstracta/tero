@@ -1,23 +1,30 @@
-insert into "user" (username, name, monthly_usd_limit, monthly_hours, created_at, deleted_at) values
-('test', 'John Doe', 10, 160, '2025-01-20 12:00', Null),
-('test2', 'Jane Doe', 20, 160, '2025-01-20 12:00', Null),
-('test3', 'John Doe 3', 10, 160, '2025-01-20 12:00', '2025-02-21 12:00'),
-('test4', 'John Doe 4', 10, 160, '2025-01-10 12:00', '2025-01-20 12:00'),
-('test5', 'John Doe 5', 10, 160, '2025-01-10 12:00', Null);
+insert into "user" (username, name, monthly_usd_limit, monthly_hours, created_at, deleted_at, exclude_from_metrics) values
+('test', 'John Doe', 10, 160, '2025-01-20 12:00', Null, false),
+('test2', 'Jane Doe', 20, 160, '2025-01-20 12:00', Null, false),
+('test3', 'John Doe 3', 10, 160, '2025-01-20 12:00', '2025-02-21 12:00', false),
+('test4', 'John Doe 4', 10, 160, '2025-01-10 12:00', '2025-01-20 12:00', false),
+('test5', 'John Doe 5', 10, 160, '2025-01-10 12:00', Null, false);
 
 insert into llm_model (id, name, model_type, description, model_vendor, token_limit, output_token_limit, prompt_1k_token_usd, completion_1k_token_usd) values
-('claude-sonnet-4', 'Claude Sonnet 4', 'CHAT', 'This is a similar model to GPT-5 but with different strengths.', 'ANTHROPIC', 200000, 64000, 0.003, 0.015),
+('claude-sonnet-5', 'Claude Sonnet 5', 'REASONING', 'This is an improved version of Claude Sonnet 4.6 with stronger reasoning. Good for complex analysis, coding, and creative writing.', 'ANTHROPIC', 1000000, 128000, 0.003, 0.015),
 ('claude-sonnet-4-6', 'Claude Sonnet 4.6', 'CHAT', 'This is an improved version of Claude Sonnet 4 with better reasoning. Good for complex analysis, coding, and creative writing. Similar pricing to Claude Sonnet 4.', 'ANTHROPIC', 200000, 64000, 0.003, 0.015),
+('claude-opus-5', 'Claude Opus 5', 'REASONING', 'This is a more capable model than Claude Sonnet 5 for highly complex tasks. Best for demanding reasoning and analysis. Higher cost than Claude Sonnet models.', 'ANTHROPIC', 1000000, 128000, 0.005, 0.025),
 ('claude-opus-4-6', 'Claude Opus 4.6', 'CHAT', 'This is a more capable model than Claude Sonnet 4 for highly complex tasks. Best for demanding reasoning and analysis. Higher cost than Claude Sonnet models.', 'ANTHROPIC', 200000, 64000, 0.005, 0.025),
 ('gemini-2.5-pro', 'Gemini 2.5 Pro', 'CHAT', 'This is an advanced reasoning model, outperforming GPT-5 Mini with a larger context while being more affordable.', 'GOOGLE', 1048576, 65536, 0.00125, 0.01),
 ('gemini-2.5-flash', 'Gemini 2.5 Flash', 'CHAT', 'This is a fast and efficient model, comparable to GPT-5 Nano, optimized for speed while maintaining high quality responses.', 'GOOGLE', 1048576, 65536, 0.0003, 0.0025),
 ('gpt-5', 'GPT-5', 'REASONING', 'This is the best reasoning model for coding and complex agentic tasks from OpenAI. Aligned with GPT-5 Mini for most use cases.', 'OPENAI', 400000, 128000, 0.00125, 0.01),
 ('gpt-5-mini', 'GPT-5 Mini', 'REASONING', 'This is a new reasoning model with a good balance between cost and intelligence. Suited for most agent tasks.', 'OPENAI', 400000, 128000, 0.00025, 0.002),
 ('gpt-5-nano', 'GPT-5 Nano', 'REASONING', 'This is a new reasoning model for simpler tasks. Lower cost than GPT-5 Mini.', 'OPENAI', 4000000, 128000, 0.00005, 0.0004),
+('gpt-5.4-nano', 'GPT-5.4 Nano', 'REASONING', 'This is the most affordable GPT-5.4-class model for simple high-volume tasks. Good for classification, extraction, and lightweight agent workflows.', 'OPENAI', 400000, 128000, 0.0002, 0.00125),
+('gpt-6-luna', 'GPT-6 Luna', 'REASONING', 'This is the fastest and most affordable GPT-6 model. Suited for everyday assistants, search, summarization, and other high-volume work.', 'OPENAI', 1050000, 128000, 0.0002, 0.00075),
 ('gpt-5.1-codex-max', 'GPT-5.1 Codex Max', 'REASONING', 'This is the most capable Codex model for long-running agentic coding. Best for complex codebases and multi-step tasks. Similar pricing to GPT-5.1 Codex.', 'OPENAI', 400000, 128000, 0.00125, 0.01),
-('gpt-5.4', 'GPT-5.4', 'REASONING', 'This is the most capable reasoning model from OpenAI for professional work. Best for demanding analysis and complex agentic tasks. Higher cost than GPT-5.', 'OPENAI', 1050000, 128000, 0.0025, 0.015),
+('gpt-5.4', 'GPT-5.4', 'REASONING', 'This is the most capable reasoning model from OpenAI for professional work. Best for demanding analysis and complex agentic tasks. Higher cost than GPT-5.', 'OPENAI', 1050000, 128000, 0.005, 0.0225),
 ('gpt-5.4-mini', 'GPT-5.4 Mini', 'REASONING', 'This is a fast reasoning model with strong performance. Suited for most agent tasks like research, drafting, and data analysis.', 'OPENAI', 400000, 128000, 0.00075, 0.0045),
-('claude-haiku-4-5', 'Claude Haiku 4.5', 'CHAT', 'This is a fast model suited for straightforward tasks. Good for summarization, extraction, and other tasks that don''t require complex reasoning.', 'ANTHROPIC', 200000, 64000, 0.001, 0.005);
+('gpt-5.6-luna', 'GPT-5.6 Luna', 'REASONING', 'This is the fastest and most affordable GPT-5.6 model. Suited for high-volume, latency-sensitive workloads like assistants, search, and summarization.', 'OPENAI', 1000000, 128000, 0.0004, 0.0018),
+('claude-haiku-4-5', 'Claude Haiku 4.5', 'CHAT', 'This is a fast model suited for straightforward tasks. Good for summarization, extraction, and other tasks that don''t require complex reasoning.', 'ANTHROPIC', 200000, 64000, 0.001, 0.005),
+('gpt-5.6-terra', 'GPT-5.6 Terra', 'REASONING', 'This is a balanced GPT-5.6 model for everyday enterprise work. Good for scaling intelligent applications with strong reasoning at lower cost than GPT-5.6 Sol.', 'OPENAI', 1000000, 128000, 0.004, 0.018),
+('gpt-6-sol', 'GPT-6 Sol', 'REASONING', 'This is the flagship GPT-6 model for the most demanding reasoning and agentic workloads. Best for complex analysis, software engineering, and multi-step knowledge work.', 'OPENAI', 1050000, 128000, 0.004, 0.015),
+('gpt-5.6-sol', 'GPT-5.6 Sol', 'REASONING', 'This is the flagship GPT-5.6 model for the most demanding reasoning and agentic workloads. Best for complex analysis, software engineering, and multi-step knowledge work.', 'OPENAI', 1000000, 128000, 0.01, 0.045);
 
 
 insert into team (name) values
@@ -41,7 +48,11 @@ insert into agent (name, description, user_id, last_update, team_id, model_id, s
 ('Agent 3', 'This is the third agent', 2, '2025-02-21 12:02', 4, 'gpt-5', 'You are a helpful AI agent.', 'PRECISE', 'LOW', 20, true, 'REACT_AGENT'),
 ('Agent 4', 'This is the fourth agent', 2, '2025-02-21 12:03', Null, 'gpt-5', 'You are a helpful AI agent.', 'CREATIVE', 'LOW', 20, false, 'REACT_AGENT'),
 ('Agent 5', 'This is the fifth agent', 2, '2025-02-21 12:04', 2, 'gpt-5', 'You are a helpful AI agent.', 'PRECISE', 'LOW', 20, false, 'REACT_AGENT'),
-('GPT-5 Nano', 'This is the default agent', Null, '2025-02-21 12:00', 1, 'gpt-5-nano', 'You are a helpful AI agent.', 'NEUTRAL', 'LOW', 20, false, 'REACT_AGENT');
+('GPT-6 Luna', 'This is the default agent', Null, '2025-02-21 12:00', 1, 'gpt-6-luna', 'You are a helpful AI agent.', 'NEUTRAL', 'LOW', 20, false, 'DEEP_AGENT');
+
+-- Match the migration that enables persistent memory for the built-in default agents.
+update agent set memory_enabled = true
+where name in ('GPT-6 Luna', 'GPT-5') and user_id is null and team_id = 1;
 
 insert into user_agent (user_id, agent_id, creation) values
 (1, 1, '2025-02-21 12:00'),
@@ -86,13 +97,13 @@ insert into thread_message (thread_id, origin, text, timestamp, minutes_saved, s
 (5, 'AGENT', 'This is a response', '2025-02-21 12:07', 50, False, 7),
 (6, 'USER', 'This is a message', '2025-02-21 12:08', Null, False, Null),
 (6, 'AGENT', 'This is a response', '2025-02-21 12:09', 60, False, 9),
-(7, 'USER', 'Which is the first natural number? Only provide the number', '2025-02-21 12:10', Null, False, Null),
+(7, 'USER', 'Which is the first natural number? Only provide the number. Don''t ask follow up questions', '2025-02-21 12:10', Null, False, Null),
 (7, 'AGENT', '1', '2025-02-21 12:11', Null, False, Null),
 (8, 'USER', 'Which is the capital of Uruguay? Output just the name', '2025-02-21 12:11', Null, False, Null),
 (8, 'AGENT', 'Montevideo', '2025-02-21 12:12', Null, False, Null),
 (9, 'USER', 'Test case message 3', '2025-02-21 12:12', Null, False, Null),
 (9, 'AGENT', 'Test case response 3', '2025-02-21 12:13', Null, False, Null),
-(10, 'USER', 'Which is the first natural number? Only provide the number', '2025-02-21 12:15', Null, False, Null),
+(10, 'USER', 'Which is the first natural number? Only provide the number. Don''t ask follow up questions', '2025-02-21 12:15', Null, False, Null),
 (10, 'AGENT', '1', '2025-02-21 12:16', Null, False, Null),
 (11, 'USER', 'Which is the capital of Uruguay? Output just the name', '2025-02-21 12:16', Null, False, Null),
 (11, 'AGENT', 'Montevideo', '2025-02-21 12:17', Null, False, Null),
@@ -102,7 +113,7 @@ insert into thread_message (thread_id, origin, text, timestamp, minutes_saved, s
 (13, 'AGENT', '4', '2025-02-21 12:14', Null, False, Null),
 (13, 'USER', 'What is 3 + 3? Only provide the number', '2025-02-21 12:14', Null, False, Null),
 (13, 'AGENT', '6', '2025-02-21 12:15', Null, False, Null),
-(14, 'USER', 'Which is the first natural number? Only provide the number', '2025-02-21 12:15', Null, False, Null),
+(14, 'USER', 'Which is the first natural number? Only provide the number. Don''t ask follow up questions', '2025-02-21 12:15', Null, False, Null),
 (14, 'AGENT', 'one', '2025-02-21 12:16', Null, False, Null);
 
 insert into test_case (thread_id, agent_id, last_update) values
@@ -140,11 +151,11 @@ insert into usage (message_id, user_id, agent_id, model_id, timestamp, quantity,
 (18, 2, 2, 'gpt-5-mini', '2025-02-21 12:17', 40, 0.2, 'PROMPT_TOKENS'),
 (18, 2, 2, 'gpt-5-mini', '2025-02-21 12:17', 80, 1.2, 'COMPLETION_TOKENS');
 
-insert into agent_prompt (name, content, last_update, shared, agent_id, user_id, starter) values
-('Test prompt private 1', 'Test prompt content', '2025-02-22 12:00', false, 1, 1, false),
-('Test prompt shared', 'Test shared prompt content', '2025-02-22 12:00', true, 1, 2, false),
-('Test prompt private 2', 'Test prompt content 2', '2025-02-22 12:00', false, 1, 2, false),
-('Test prompt shared 2', 'Test shared prompt content 2', '2025-02-22 12:00', true, 3, 2, false);
+insert into agent_prompt (name, content, last_update, shared, agent_id, user_id, starter, collapsed) values
+('Test prompt private 1', 'Test prompt content', '2025-02-22 12:00', false, 1, 1, false, false),
+('Test prompt shared', 'Test shared prompt content', '2025-02-22 12:00', true, 1, 2, false, false),
+('Test prompt private 2', 'Test prompt content 2', '2025-02-22 12:00', false, 1, 2, false, false),
+('Test prompt shared 2', 'Test shared prompt content 2', '2025-02-22 12:00', true, 3, 2, false, false);
 
 insert into external_agent (name, icon) values
 ('ChatGPT', Null),

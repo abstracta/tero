@@ -16,6 +16,7 @@ const testExecutionStore = reactive({
     testCaseResults: [] as TestCaseResult[],
     executionStates: new Map<number, TestCaseExecutionState>(),
     isStoppingSuite: false,
+    streamingSuiteRunId: undefined as number | undefined,
 
     setSelectedSuiteRun(suiteRun: TestSuiteRun | undefined) {
         this.selectedSuiteRun = suiteRun
@@ -285,6 +286,7 @@ export function useTestExecutionStore() {
     }
 
     function clear() {
+        testExecutionStore.streamingSuiteRunId = undefined
         testExecutionStore.clear()
     }
 

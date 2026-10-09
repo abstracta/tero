@@ -20,6 +20,7 @@ const processedContent = ref<string>('')
 const lastUsedProcessor = ref<FileProcessor | null>(null)
 const quotaExceeded = ref(false)
 const quotaExceededMessage = ref<string>('')
+const rateLimited = ref(false)
 const originalFile = ref<File>()
 const originalFileURL = ref<string>('')
 const fileName = ref<string>('')
@@ -96,6 +97,7 @@ const loadFilePreview = async () => {
     const [file, processed] = await findFile()
     if (!isChat.value) {
       await checkQuotaExceeded(processed)
+      rateLimited.value = checkRateLimited(processed)
     }
     originalFile.value = file
     originalFileURL.value = URL.createObjectURL(file)
@@ -145,6 +147,13 @@ const checkQuotaExceeded = async (toolFile: ProcessedContent) => {
   return false
 }
 
+const checkRateLimited = (toolFile: ProcessedContent) => {
+  if (toolFile && toolFile.status === FileStatus.RATE_LIMITED) {
+    return true
+  }
+  return false
+}
+
 const checkUserCanReprocess = async () => {
   if (isChat.value) {
     canReprocess.value = false
@@ -177,13 +186,19 @@ const reprocess = async () => {
   try {
     const newProcessor = lastUsedProcessor.value === FileProcessor.ENHANCED ? FileProcessor.BASIC : FileProcessor.ENHANCED
     const agentId = parsedAgentId.value
-    await api.configureAgentTool(agentId, new AgentToolConfig(toolId!, {advancedFileProcessing: newProcessor === FileProcessor.ENHANCED}))
+    const toolConfigs = await api.findAgentToolConfigs(agentId)
+    const docsConfig = toolConfigs.find(config => config.toolId === toolId)
+    await api.configureAgentTool(agentId, new AgentToolConfig(toolId!, {
+      ...docsConfig?.config,
+      advancedFileProcessing: newProcessor === FileProcessor.ENHANCED
+    }))
     await api.updateAgentToolFile(agentId, toolId!, fileId, new File([], originalFile.value!.name, { type: originalFile.value!.type }))
     let toolFile = await api.findAgentToolFile(agentId, toolId!, fileId)
     toolFile = await awaitFileProcessingCompletes(toolFile)
     processedContent.value = toolFile.processedContent
     const quotaExceeded = await checkQuotaExceeded(toolFile)
     if (quotaExceeded) return
+    rateLimited.value = checkRateLimited(toolFile)
     lastUsedProcessor.value = newProcessor
   } catch (e) {
     handleError(e)
@@ -253,9 +268,9 @@ const awaitFileProcessingCompletes = async (toolFile: DocToolFile) => {
             <span class="mx-2" v-tooltip.bottom="lastUsedProcessor == FileProcessor.ENHANCED ? t('processingModeEnhancedTooltip') : t('processingModeBasicTooltip')">{{ processingMode }}</span>
           </div>
           <div class="flex-1 overflow-auto p-6" :class="backgroundClasses">
-            <div v-if="processedContent" v-html="renderMarkDown(processedContent, true, t)" class="formatted-text" />
+            <div v-if="processedContent && !rateLimited" v-html="renderMarkDown(processedContent, true, t)" class="formatted-text" />
             <div v-else class="h-full flex items-center justify-center">
-              {{ quotaExceeded ? t('noProcessedContentQuotaExceeded') : t('noProcessedContent') }}
+              {{ quotaExceeded ? t('noProcessedContentQuotaExceeded') : rateLimited ? t('noProcessedContentRateLimited') : t('noProcessedContent') }}
             </div>
           </div>
         </div>
@@ -270,6 +285,7 @@ const awaitFileProcessingCompletes = async (toolFile: DocToolFile) => {
     "loadingFilePreview": "Loading file preview...",
     "noProcessedContent": "No content extracted from the file",
     "noProcessedContentQuotaExceeded": "No content extracted from the file. You have reached the monthly usage quota.",
+    "noProcessedContentRateLimited": "File processing was incomplete because the AI model is currently experiencing high demand. Try reprocessing again in a few moments.",
     "reprocessing": "Reprocessing",
     "basicResult": "Basic processing",
     "enhancedResult": "AI enhanced processing",
@@ -278,6 +294,7 @@ const awaitFileProcessingCompletes = async (toolFile: DocToolFile) => {
     "reprocessWithBasicTooltip": "You will lose the results generated with AI",
     "reprocessWithAITooltip": "Consumes more budget",
     "quotaExceeded": "You have reached the monthly usage quota. Contact {support} to increase your monthly quota or wait for the next month.",
+    "rateLimitedTooltip": "The AI model is currently experiencing high demand. Try again in a few moments.",
     "filePreviewNotAvailable": "File preview not available",
     "filePreviewDescription": "You can download the file to view it in a compatible application.",
     "downloadFile": "Download",
@@ -292,6 +309,7 @@ const awaitFileProcessingCompletes = async (toolFile: DocToolFile) => {
     "loadingFilePreview": "Cargando vista previa de archivo...",
     "noProcessedContent": "No se extrajo contenido del archivo",
     "noProcessedContentQuotaExceeded": "No se extrajo contenido del archivo. Has alcanzado la cuota de uso mensual.",
+    "noProcessedContentRateLimited": "El procesamiento del archivo quedó incompleto porque el modelo de IA está saturado. Intenta reprocesar de nuevo en unos instantes.",
     "reprocessing": "Reprocesando",
     "basicResult": "Resultado de procesamiento básico",
     "enhancedResult": "Resultado de procesamiento mejorado por IA",
@@ -300,6 +318,7 @@ const awaitFileProcessingCompletes = async (toolFile: DocToolFile) => {
     "reprocessWithBasicTooltip": "Al reprocesar en modo básico perderás los resultados generados con IA",
     "reprocessWithAITooltip": "Consume más presupuesto",
     "quotaExceeded": "Ha alcanzado la cuota de uso mensual. Contacte a {support} para aumentar su cuota mensual o espere al próximo mes.",
+    "rateLimitedTooltip": "El modelo de IA está experimentando alta demanda. Intenta de nuevo en unos instantes.",
     "filePreviewNotAvailable": "Vista previa de archivo no disponible",
     "filePreviewDescription": "Puedes descargar el archivo para verlo en una aplicación compatible.",
     "downloadFile": "Descargar",

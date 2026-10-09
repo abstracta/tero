@@ -19,26 +19,43 @@ import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { type Textarea }from 'primevue'
 import AudioTranscription from './AudioTranscription.vue'
+import PromptChip from './PromptChip.vue'
+import PromptContentDialog from './PromptContentDialog.vue'
 import FileInput from '../common/FileInput.vue'
 import { type ErrorMessage } from '../common/ErrorBox.vue'
 import { UploadedFile } from '../../utils/domain'
+import {
+  parsePromptVariables,
+  renderPromptTemplate,
+  defaultVariableValues,
+  type PromptVariable
+} from '../../utils/promptVariables'
 import EmojiConvertor from 'emoji-js'
-import { IconPaperclip, IconMicrophone, IconX, IconArrowUp, IconPlayerStopFilled, IconLoader2 } from '@tabler/icons-vue'
+import { IconBook2, IconEditCircle, IconPaperclip, IconMicrophone, IconX, IconArrowUp, IconPlayerStopFilled, IconLoader2 } from '@tabler/icons-vue'
+import SimpleIcon from '../common/SimpleIcon.vue'
+
+type InsertedPrompt = {
+  name: string
+  content: string
+}
 
 const props = defineProps<{
   modelValue: string
   chat: AgentChatController
   isAnswering?: boolean
   initialFiles?: UploadedFile[]
+  maxFileSizeMb?: number
   enablePrompts?: boolean
   borderless?: boolean
   shareablePrompts?: boolean
   readonlyPrompts?: boolean
+  insertPromptAsText?: boolean
+  beforeSend?: () => Promise<boolean>
 }>()
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: string): void
-  (e: 'send', text: string, files: UploadedFile[]): void
+  (e: 'send', text: string, files: UploadedFile[], collapsedName?: string): void
   (e: 'stop'): void
   (e: 'filesChange', files: UploadedFile[]): void
   (e: 'viewFile', file: UploadedFile): void
@@ -56,8 +73,11 @@ const agentPrompts = ref<AgentPrompt[]>([])
 const isShowingPrompts = ref(false);
 const selectedPromptIndex = ref<number>(0);
 const selectedPrompt = ref<AgentPrompt>();
-const PROMPT_VARIABLES_REGEX = /(\\*)\{\{(.*?)\}\}/g;
-const promptVariables = ref<string[]>([]);
+const insertedPrompt = ref<InsertedPrompt>();
+const showCollapsedPromptEditor = ref(false);
+const showDiscardConfirmation = ref(false);
+const collapsedPromptDraft = ref('');
+const promptVariables = ref<PromptVariable[]>([]);
 const promptVariableValues = ref<Record<string, string>>({});
 const editingPrompt = ref<AgentPrompt>();
 
@@ -65,6 +85,7 @@ const MAX_FILES = 5
 const fileInputRef = ref<InstanceType<typeof FileInput> | null>(null)
 const attachedFiles = ref<UploadedFile[]>(props.initialFiles || [])
 const attachedFilesError = ref<ErrorMessage | undefined>(undefined)
+const isPreparingSend = ref(false)
 
 const transcriptionRef = ref<InstanceType<typeof AudioTranscription> | null>(null)
 const isRecordingAudio = ref<boolean>(false);
@@ -166,37 +187,84 @@ const onPaste = (event: ClipboardEvent) => {
 }
 
 const sendMessage = async () => {
-  if (props.isAnswering || (inputText.value.trim() === '' && attachedFiles.value.length === 0)) {
+  let text = insertedPrompt.value?.content ?? inputText.value
+  if (props.isAnswering || isPreparingSend.value || (text.trim() === '' && attachedFiles.value.length === 0)) {
     return
   }
-  emit('send', inputText.value, attachedFiles.value)
+  if (props.beforeSend) {
+    isPreparingSend.value = true
+    try {
+      if (!await props.beforeSend()) return
+    } finally {
+      isPreparingSend.value = false
+    }
+    text = insertedPrompt.value?.content ?? inputText.value
+    if (text.trim() === '' && attachedFiles.value.length === 0) return
+  }
+  emit('send', text, attachedFiles.value, insertedPrompt.value?.name)
   inputText.value = ''
   attachedFiles.value = []
+  insertedPrompt.value = undefined
+  showCollapsedPromptEditor.value = false
 }
 
 const usePrompt = async (prompt: AgentPrompt) => {
   const promptText = prompt.content || "";
-  let variables = extractPromptVariables(promptText);
+  const variables = parsePromptVariables(promptText);
   selectedPrompt.value = prompt;
   if (variables.length > 0) {
     promptVariables.value = variables;
-    promptVariableValues.value = {};
+    promptVariableValues.value = defaultVariableValues(variables);
   } else {
-    await setInputValue(promptText);
+    await placePrompt(prompt, promptText);
+    selectedPrompt.value = undefined;
   }
 }
 
-const extractPromptVariables = (template: string): string[] => {
-  const vars = new Set<string>();
-  let match: RegExpExecArray | null;
-  while ((match = PROMPT_VARIABLES_REGEX.exec(template))) {
-    const [_, backslashes, name] = match;
-    // only unescaped placeholders (even # of \ real placeholder)
-    if (backslashes.length % 2 === 0) {
-      vars.add(name);
-    }
+const setCollapsedPrompt = (name: string, content: string) => {
+  insertedPrompt.value = { name, content }
+  inputText.value = ''
+  showCollapsedPromptEditor.value = false
+}
+
+const placePrompt = async (prompt: AgentPrompt, content: string) => {
+  if (props.insertPromptAsText || !prompt.collapsed) {
+    insertedPrompt.value = undefined
+    showCollapsedPromptEditor.value = false
+    await setInputValue(content);
+    return
   }
-  return Array.from(vars);
+  setCollapsedPrompt(prompt.name!.trim(), content)
+  isShowingPrompts.value = false
+}
+
+const openCollapsedPromptEditor = () => {
+  collapsedPromptDraft.value = insertedPrompt.value!.content
+  showCollapsedPromptEditor.value = true
+}
+
+const confirmCollapsedPromptEdit = () => {
+  insertedPrompt.value!.content = collapsedPromptDraft.value
+  showCollapsedPromptEditor.value = false
+}
+
+const requestCloseCollapsedPromptEditor = () => {
+  if (collapsedPromptDraft.value !== insertedPrompt.value?.content) {
+    showDiscardConfirmation.value = true
+    return
+  }
+  showCollapsedPromptEditor.value = false
+}
+
+const discardCollapsedPromptEdit = () => {
+  showDiscardConfirmation.value = false
+  showCollapsedPromptEditor.value = false
+}
+
+const removeInsertedPrompt = () => {
+  insertedPrompt.value = undefined
+  showCollapsedPromptEditor.value = false
+  focus()
 }
 
 const setInputValue = async(value: string) => {
@@ -217,32 +285,23 @@ const selectPrompt = async (prompt: AgentPrompt) => {
 }
 
 const submitPromptVariables = async () => {
-  const promptText = selectedPrompt.value?.content || "";
-  let newPromptText = replaceVariables(promptText, promptVariableValues.value);
+  const prompt = selectedPrompt.value;
+  const promptText = prompt?.content || "";
+  const newPromptText = renderPromptTemplate(promptText, promptVariableValues.value);
   closePromptVariablesEditor();
-  await setInputValue(newPromptText);
-}
-
-const replaceVariables = (template: string, vars: Record<string, any>): string => {
-  return template.replace(PROMPT_VARIABLES_REGEX, (_, backslashes, name) => {
-    const bsCount = backslashes.length;
-    const literalSlashes = Math.floor(bsCount / 2);
-    if (bsCount % 2 === 1) {
-      // escaped braces, keep {{name}} literally
-      return "\\".repeat(literalSlashes) + `{{${name}}}`;
-    }
-    // real placeholder, substitute value or empty string
-    const value = vars[name] ?? "";
-    return "\\".repeat(literalSlashes) + value;
-  });
+  if (prompt) {
+    await placePrompt(prompt, newPromptText);
+  }
 }
 
 const closePromptVariablesEditor = () => {
   promptVariables.value = [];
+  promptVariableValues.value = {};
+  selectedPrompt.value = undefined;
 }
 
 const togglePrompts = async () => {
-  if (!isShowingPrompts.value && inputText.value == "") {
+  if (!isShowingPrompts.value && inputText.value == "" && !insertedPrompt.value) {
     inputText.value = "/"
     await focus();
   } else if (!editingPrompt.value) {
@@ -380,7 +439,9 @@ defineExpose({
   focus,
   createPromptFromMessage,
   selectPrompt,
-  reloadPrompts: loadAgentPrompts
+  reloadPrompts: loadAgentPrompts,
+  setCollapsedPrompt,
+  sendMessage
 })
 </script>
 
@@ -392,12 +453,6 @@ defineExpose({
           class="flex flex-col gap-1 relative rounded-xl bg-surface"
           :class="!borderless ? 'border focus-within:border-abstracta shadow-sm p-2' : ''">
           <div class="w-full absolute -translate-x-2 -translate-y-full -mt-6">
-            <PromptEditor v-if="editingPrompt"
-              :editing-prompt="editingPrompt"
-              :shareable="shareablePrompts"
-              :prompt-saver="savePrompt"
-              :error-handler="chat.handleError"
-              @close="closePromptEditor"/>
             <PromptsPanel v-if="isShowingPrompts && !editingPrompt"
               :prompts="filteredPrompts"
               :selected-prompt-index="selectedPromptIndex"
@@ -413,23 +468,33 @@ defineExpose({
               variant="zone"
               :disabled="!chat.supportsFileUpload()"
               :maxFiles="MAX_FILES"
+              :maxFileSizeMb="maxFileSizeMb"
               :attachedFiles="attachedFiles"
-              :allowedExtensions="['pdf', 'txt', 'md', 'csv', 'xlsx', 'xls', 'png', 'jpg', 'jpeg', 'har', 'json', 'svg']"
+              :allowedExtensions="['pdf', 'txt', 'md', 'csv', 'xlsx', 'xls', 'docx', 'png', 'jpg', 'jpeg', 'har', 'json', 'svg']"
               @filesChange="onFilesChange"
               @error="attachedFilesError = $event">
                 <div class="w-full">
-                  <!-- Using tailwindcss h-[] class is causing scroll to not working properly, using max-height inline style instead solves this issue -->
-                  <Textarea
-                    ref="inputRef"
-                    v-show="!isTranscribing"
-                    v-model="inputText"
-                    @keydown="onKeydown"
-                    @paste="onPaste"
-                    :placeholder="t('placeholderNewMessage')"
-                    auto-resize
-                    :rows="1"
-                    class="w-full !text-base !border-none !shadow-none min-h-[44px]"
-                    :style="{ 'max-height': '200px' }" />
+                  <div class="relative">
+                    <!-- Using tailwindcss h-[] class is causing scroll to not working properly, using max-height inline style instead solves this issue -->
+                    <Textarea
+                      ref="inputRef"
+                      v-show="!isTranscribing"
+                      v-model="inputText"
+                      @keydown="onKeydown"
+                      @paste="onPaste"
+                      :disabled="!!insertedPrompt"
+                      :placeholder="insertedPrompt ? '' : t('placeholderNewMessage')"
+                      auto-resize
+                      :rows="1"
+                      class="w-full !text-base !border-none !shadow-none min-h-[44px]"
+                      :style="{ 'max-height': '200px' }" />
+                    <span
+                      v-if="insertedPrompt && !isTranscribing"
+                      class="absolute left-3 top-2 text-sm text-content-muted"
+                      v-tooltip.bottom="t('collapsedPromptHint')">
+                      {{ t('promptAttached') }}
+                    </span>
+                  </div>
                   <AudioTranscription
                     ref="transcriptionRef"
                     v-show="isTranscribing"
@@ -441,7 +506,16 @@ defineExpose({
                     variant="input"
                     :attached-files="attachedFiles"
                     @remove-file="removeAttachedFile"
-                    @view-file="emit('viewFile', $event)" />
+                    @view-file="emit('viewFile', $event)">
+                    <template v-if="insertedPrompt" #leading>
+                      <PromptChip :name="insertedPrompt.name">
+                        <template #actions>
+                          <SimpleIcon interactive v-tooltip.bottom="t('editInsertedPrompt')" :icon="IconEditCircle" @click="openCollapsedPromptEditor" />
+                          <SimpleIcon interactive v-tooltip.bottom="t('removeInsertedPrompt')" :icon="IconX" class="hover:text-error-alt" @click="removeInsertedPrompt" />
+                        </template>
+                      </PromptChip>
+                    </template>
+                  </ChatAttachments>
                 </div>
                 <div class="flex w-full justify-between">
                   <div class="flex items-center gap-2 mx-2">
@@ -467,7 +541,7 @@ defineExpose({
                         <SimpleButton v-if="isTranscribing" @click="cancelRecordingAudio">
                           <IconX/>
                         </SimpleButton>
-                        <SimpleButton v-else @click="startRecordingAudio" v-tooltip.top="t('transcriptionTooltip')">
+                        <SimpleButton v-else @click="startRecordingAudio" v-tooltip.top="t('transcriptionTooltip')" :disabled="!!insertedPrompt">
                           <IconMicrophone/>
                         </SimpleButton>
                       </div>
@@ -491,19 +565,55 @@ defineExpose({
         </div>
       </div>
     </div>
+    <PromptEditor
+      v-if="editingPrompt"
+      :editing-prompt="editingPrompt"
+      :shareable="shareablePrompts"
+      :prompt-saver="savePrompt"
+      :error-handler="chat.handleError"
+      @close="closePromptEditor"
+    />
+    <PromptContentDialog :visible="showCollapsedPromptEditor" :title="insertedPrompt?.name" @close="requestCloseCollapsedPromptEditor">
+      <Form class="flex flex-col flex-1 min-h-0 gap-3" @submit="confirmCollapsedPromptEdit">
+        <div class="form-field flex flex-col flex-1">
+          <InteractiveInput id="collapsed-prompt-text" class="flex-1" v-model="collapsedPromptDraft" name="collapsed-prompt-text" :rows="10" />
+        </div>
+        <div class="flex justify-end shrink-0 mt-4">
+          <SimpleButton type="submit" :disabled="!collapsedPromptDraft.trim()" class="px-6" variant="primary" shape="rounded">
+            {{ t('confirm') }}
+          </SimpleButton>
+        </div>
+      </Form>
+    </PromptContentDialog>
+    <Dialog v-model:visible="showDiscardConfirmation"
+      :header="t('discardChangesTitle')" :modal="true"
+      :draggable="false" :resizable="false" :closable="false" class="max-w-150">
+      <div class="flex flex-col gap-5">
+        <div class="flex flex-row gap-2 items-start whitespace-pre-line">
+          {{ t('discardChangesDescription') }}
+        </div>
+        <div class="flex flex-row gap-2 justify-end">
+          <SimpleButton @click="showDiscardConfirmation = false" shape="square" variant="secondary">{{ t('continueEditing') }}</SimpleButton>
+          <SimpleButton @click="discardCollapsedPromptEdit" shape="square" variant="error">{{ t('discardChanges') }}</SimpleButton>
+        </div>
+      </div>
+    </Dialog>
     <Dialog :visible="promptVariables.length > 0"
       :header="t('promptVariablesTitle')" :modal="true"
       :draggable="false" :resizable="false" :closable="true" class="w-full max-w-[600px] m-4"
       @update:visible="closePromptVariablesEditor">
         <Form class="flex flex-col gap-5" @submit="submitPromptVariables">
           <div class="flex flex-col gap-3">
-            <div v-for="variable in promptVariables" class="w-full">
+            <div v-for="(variable, index) in promptVariables" :key="variable.name" class="w-full">
               <div class="form-field gap-1 flex flex-col ">
-                <label :for="variable">{{ variable }}</label>
+                <label :for="variable.name">{{ variable.name }}</label>
+                <Select v-if="variable.input.type === 'select'" v-model="promptVariableValues[variable.name]"
+                  :options="variable.input.options" class="w-full"
+                  :id="variable.name" :autofocus="index === 0"></Select>
                 <!-- Using tailwindcss h-[] class is causing scroll to not working properly, using max-height inline style instead solves this issue -->
-                <Textarea v-model="promptVariableValues[variable]"
+                <Textarea v-else v-model="promptVariableValues[variable.name]"
                   :auto-resize="true" :rows="1" class="min-h-[80px]" :style="{ 'max-height': '150px' }"
-                  :id="variable" :placeholder="t('promptVariablePlaceholder')" :autofocus="promptVariables.indexOf(variable) === 0"></Textarea>
+                  :id="variable.name" :placeholder="t('promptVariablePlaceholder')" :autofocus="index === 0"></Textarea>
               </div>
             </div>
           </div>
@@ -521,6 +631,14 @@ defineExpose({
 .chat-primary-button {
   @apply h-12 w-12 relative;
 }
+
+#collapsed-prompt-text {
+  height: 100%;
+}
+
+#collapsed-prompt-text textarea {
+  min-height: 100%;
+}
 </style>
 
 <i18n lang="json">
@@ -533,7 +651,15 @@ defineExpose({
     "confirm": "Confirm",
     "transcriptionTooltip": "Transcription",
     "maxFilesReached": "Maximum {max} files allowed",
-    "manageFilesTooltip": "Attach files"
+    "manageFilesTooltip": "Attach files",
+    "editInsertedPrompt": "Edit",
+    "removeInsertedPrompt": "Remove",
+    "promptAttached": "Prompt attached",
+    "collapsedPromptHint": "While a collapsed prompt is attached, you can't add more text.",
+    "discardChangesTitle": "Discard changes?",
+    "discardChangesDescription": "You have unsaved edits to this prompt. If you close now, all changes will be lost.",
+    "continueEditing": "Continue editing",
+    "discardChanges": "Discard changes"
   },
   "es":{
     "placeholderNewMessage": "Escribe tu mensaje aquí...",
@@ -543,7 +669,15 @@ defineExpose({
     "confirm": "Confirmar",
     "transcriptionTooltip": "Transcripción",
     "maxFilesReached": "Máximo {max} archivos permitidos",
-    "manageFilesTooltip": "Adjuntar archivos"
+    "manageFilesTooltip": "Adjuntar archivos",
+    "editInsertedPrompt": "Editar",
+    "removeInsertedPrompt": "Quitar",
+    "promptAttached": "Prompt adjunto",
+    "collapsedPromptHint": "Mientras haya un prompt colapsado adjunto, no puedes agregar más texto.",
+    "discardChangesTitle": "¿Descartar cambios?",
+    "discardChangesDescription": "Tienes cambios sin guardar en este prompt. Si cierras ahora, todos los cambios se perderán.",
+    "continueEditing": "Seguir editando",
+    "discardChanges": "Descartar"
   }
 }
 </i18n>

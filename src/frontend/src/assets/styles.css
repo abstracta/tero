@@ -301,7 +301,7 @@ html.dark .p-toggleswitch:not(.p-toggleswitch-checked) .p-toggleswitch-handle {
 }
 
 .formatted-text hr {
-  @apply hidden;
+  @apply border-0 border-t border-border my-3 mx-auto w-[98%];
 }
 
 .formatted-text h1,

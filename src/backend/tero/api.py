@@ -94,6 +94,7 @@ class Manifest(CamelCaseModel):
     contact_email: str
     auth: ManifestAuthConfig
     disable_publish_global: bool
+    max_file_size_mb: int
 
 
 @app.get("/manifest.json")
@@ -106,7 +107,8 @@ async def manifest() -> Manifest:
             client_id=env.openid_client_id,
             scope=env.openid_scope,
         ),
-        disable_publish_global=env.disable_publish_global or False
+        disable_publish_global=env.disable_publish_global or False,
+        max_file_size_mb=env.max_file_size_mb,
     )
 
 

@@ -92,7 +92,9 @@ async def session_fixture(postgres_container: PostgresContainer) -> AsyncGenerat
     
     original_engine = repos_module.engine
     repos_module.engine = test_engine
-    
+    original_db_url = env.db_url
+    env.db_url = postgres_container.get_connection_url()
+
     try:
         async with test_engine.begin() as conn:
             await conn.run_sync(SQLModel.metadata.drop_all)
@@ -102,6 +104,7 @@ async def session_fixture(postgres_container: PostgresContainer) -> AsyncGenerat
             yield ret
     finally:
         repos_module.engine = original_engine
+        env.db_url = original_db_url
 
 
 async def _init_db_data(conn: AsyncConnection) -> None:
@@ -112,8 +115,13 @@ async def _init_db_data(conn: AsyncConnection) -> None:
             await conn.exec_driver_sql(statement)
 
 
+@pytest.fixture(name="agent_store")
+def agent_store_fixture() -> BaseStore:
+    return InMemoryStore()
+
+
 @pytest_asyncio.fixture(name="client")
-async def client_fixture(session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
+async def client_fixture(session: AsyncSession, agent_store: BaseStore) -> AsyncGenerator[AsyncClient, None]:
     async def get_db_override() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
@@ -124,10 +132,8 @@ async def client_fixture(session: AsyncSession) -> AsyncGenerator[AsyncClient, N
             raise ValueError(f"User with ID {USER_ID} not found")
         return user
 
-    test_store = InMemoryStore()
-
     def get_store_override() -> BaseStore:
-        return test_store
+        return agent_store
 
     app.dependency_overrides[get_db] = get_db_override
     app.dependency_overrides[auth.get_current_user] = get_current_user_override

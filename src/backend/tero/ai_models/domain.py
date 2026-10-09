@@ -78,8 +78,8 @@ class ReasoningEffort(Enum):
 
 class AiModelProvider(ABC):
 
-    def build_chat_model(self, model: str, temperature: Optional[float]=None, reasoning_effort: Optional[str] = None) -> BaseChatModel:
-        ret = self._build_chat_model(model, temperature, reasoning_effort, False)
+    def build_chat_model(self, model: str, temperature: Optional[float]=None, reasoning_effort: Optional[str] = None, request_timeout: Optional[float] = None, max_retries: Optional[int] = None) -> BaseChatModel:
+        ret = self._build_chat_model(model, temperature, reasoning_effort, False, request_timeout, max_retries)
         return self._prepare_chat_model(ret)
 
     def _prepare_chat_model(self, model: Any) -> BaseChatModel:
@@ -87,12 +87,12 @@ class AiModelProvider(ABC):
         model.callbacks=[StdOutCallbackHandler(), ConsoleCallbackHandler()]
         return model
 
-    def build_streaming_chat_model(self, model: str, temperature: Optional[float]=None, reasoning_effort: Optional[str]=None) -> BaseChatModel:
+    def build_streaming_chat_model(self, model: str, temperature: Optional[float]=None, reasoning_effort: Optional[str]=None, max_tokens: Optional[int] = None) -> BaseChatModel:
         ret = self._build_chat_model(model, temperature, reasoning_effort, True)
         return self._prepare_chat_model(ret)
 
     @abstractmethod
-    def _build_chat_model(self, model: str, temperature: Optional[float], reasoning_effort: Optional[str], streaming: bool) -> BaseChatModel:
+    def _build_chat_model(self, model: str, temperature: Optional[float], reasoning_effort: Optional[str], streaming: bool, request_timeout: Optional[float] = None, max_retries: Optional[int] = None) -> BaseChatModel:
         pass
 
     @abstractmethod
@@ -102,7 +102,7 @@ class AiModelProvider(ABC):
     async def transcribe_audio(self, file: io.BytesIO, model: str) -> str:
         raise NotImplementedError("Transcription is not yet supported by this provider")
 
-    def build_embedding(self, model: str) -> Embeddings:
+    def build_embedding(self, model: str, request_timeout: Optional[float] = None, max_retries: Optional[int] = None) -> Embeddings:
         raise NotImplementedError("Embedding is not yet supported by this provider")
 
     def count_tokens(self, txt: str, model: str) -> int:

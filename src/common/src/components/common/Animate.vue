@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { ref, watch, computed, onMounted } from 'vue';
+import { ref, watch, computed, onMounted, onUnmounted } from 'vue';
 import { useMotion } from '@vueuse/motion';
 import { AnimationEffect, animations } from "../../utils/animations"
 
@@ -22,11 +22,16 @@ const props = defineProps({
   enabled: {
     type: Boolean,
     default: true
+  },
+  animateOnMount: {
+    type: Boolean,
+    default: true
   }
 });
 
-const shouldAnimate = ref(props.enabled);
-const target = ref(null);
+const target = ref<HTMLElement | null>(null);
+const isVerticalExpansion = props.effect === AnimationEffect.EXPAND_VERTICAL;
+const usesManualMotion = isVerticalExpansion || !props.animateOnMount;
 
 const selectedAnimation = computed(() => {
   return animations[props.effect];
@@ -54,31 +59,69 @@ const variants = computed(() => {
   };
 });
 
-const { apply } = useMotion(target, variants.value);
+const { apply, set } = useMotion(target, variants.value, usesManualMotion ? {
+  syncVariants: false,
+  lifeCycleHooks: false,
+  visibilityHooks: false,
+  eventListeners: false
+} : undefined);
+
+if (isVerticalExpansion && props.animateOnMount) set('initial');
+
+const applyEnter = () => {
+  if (isVerticalExpansion && target.value) {
+    const enterAnimation = apply({
+      ...enterWithDelay.value,
+      height: target.value.scrollHeight
+    });
+    void enterAnimation?.then(() => {
+      if (props.enabled) set({ height: 'auto' });
+    });
+  } else {
+    apply('enter');
+  }
+};
+
+const applyLeave = () => {
+  if (isVerticalExpansion && target.value) {
+    set({ height: target.value.getBoundingClientRect().height });
+  }
+  return apply('leave');
+};
+
+let enterTimeout: ReturnType<typeof setTimeout> | undefined;
+
+const scheduleEnter = () => {
+  clearTimeout(enterTimeout);
+  enterTimeout = setTimeout(() => {
+    if (props.enabled) applyEnter();
+  }, 20);
+};
+
 onMounted(() => {
-  if (shouldAnimate.value) {
-    setTimeout(() => {
-      apply('enter');
-    }, 20);
+  if (props.enabled && props.animateOnMount) {
+    scheduleEnter();
+  } else if (!props.enabled) {
+    applyLeave();
   }
 });
 
 watch(() => props.enabled, (newValue) => {
-  shouldAnimate.value = newValue;
   if (newValue) {
-    setTimeout(() => {
-      apply('enter');
-    }, 20);
+    scheduleEnter();
   } else {
-    apply('leave');
+    clearTimeout(enterTimeout);
+    applyLeave();
   }
-}, { immediate: true });
+});
+
+onUnmounted(() => clearTimeout(enterTimeout));
 
 const reset = () => {
-  shouldAnimate.value = false;
-  setTimeout(() => {
-    shouldAnimate.value = true;
-  }, 50);
+  const leaveAnimation = applyLeave();
+  void leaveAnimation?.then(() => {
+    if (props.enabled) applyEnter();
+  });
 };
 
 defineExpose({
@@ -87,7 +130,13 @@ defineExpose({
 </script>
 
 <template>
-  <div ref="target" :class="shouldAnimate ? 'transform-gpu' : 'hidden'">
+  <div
+    ref="target"
+    class="transform-gpu"
+    :class="{
+      'overflow-hidden': isVerticalExpansion,
+      hidden: !isVerticalExpansion && !props.enabled
+    }">
     <slot></slot>
   </div>
-</template> 
+</template>

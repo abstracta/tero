@@ -12,12 +12,16 @@
     // use this since 23.7.0 builds locally and takes a long time
     "nodejs": "23.6.1",
     "pnpm": "11",
+    "mkcert": "latest",
+    "pandoc": "latest",
+    "plantuml": "latest",
     // provide libstdc++.so.6 / libz.so.1 for pip wheels (numpy, pyodbc)
     "gcc-unwrapped": {
       "version": "latest",
       "outputs": ["lib"]
     },
     "zlib": "latest",
+    "unixodbc": "latest",
     "unixODBCDrivers.msodbcsql18": "latest"
   },
   "env": {
@@ -35,7 +39,11 @@
       "ln -sf \"$DEVBOX_PROJECT_ROOT/.devbox/nix/profile/default/lib/libz.so.1\" \"$DEVBOX_PROJECT_ROOT/.devbox/extralib/libz.so.1\"",
       // pyodbc resolves drivers by name from odbcinst.ini; the Nix-installed driver is not in the system ODBC registry, so we generate one pointing at it
       "mkdir -p \"$DEVBOX_PROJECT_ROOT/.devbox/odbc\"",
-      "_msodbc=$(ls \"$DEVBOX_PROJECT_ROOT\"/.devbox/nix/profile/default/lib/libmsodbcsql-*.so* 2>/dev/null | head -1); printf '[ODBC Driver 18 for SQL Server]\\nDescription=Microsoft ODBC Driver 18 for SQL Server\\nDriver=%s\\n' \"$_msodbc\" > \"$DEVBOX_PROJECT_ROOT/.devbox/odbc/odbcinst.ini\""
+      "_libdir=\"$DEVBOX_PROJECT_ROOT/.devbox/nix/profile/default/lib\"",
+      "_msodbc=$(ls \"$_libdir\"/libmsodbcsql*.dylib \"$_libdir\"/libmsodbcsql-*.so* 2>/dev/null | head -1)",
+      "printf '[ODBC Driver 18 for SQL Server]\\nDescription=Microsoft ODBC Driver 18 for SQL Server\\nDriver=%s\\n' \"$_msodbc\" > \"$DEVBOX_PROJECT_ROOT/.devbox/odbc/odbcinst.ini\"",
+      // macOS pyodbc wheels link against Homebrew unixODBC; repoint them at the Nix library from devbox
+      "if [ \"$(uname)\" = Darwin ]; then _nixodbc=$(readlink \"$_libdir/libodbc.2.dylib\" 2>/dev/null || echo \"$_libdir/libodbc.2.dylib\"); for _pyodbc in \"$DEVBOX_PROJECT_ROOT/src/backend/.venv\"/lib/python*/site-packages/pyodbc*.so; do [ -f \"$_pyodbc\" ] || continue; install_name_tool -change /opt/homebrew/opt/unixodbc/lib/libodbc.2.dylib \"$_nixodbc\" \"$_pyodbc\" 2>/dev/null || true; install_name_tool -change /usr/local/opt/unixodbc/lib/libodbc.2.dylib \"$_nixodbc\" \"$_pyodbc\" 2>/dev/null || true; done; fi"
     ],
     "scripts": {
       "install": [
@@ -102,9 +110,24 @@
         "cd src/backend",
         "poetry run pyright"
       ],
+      "verify": [
+        "set -e",
+        "echo '==> backend: pyright'",
+        "(cd src/backend && poetry run pyright)",
+        "echo '==> frontend: type-check + lint'",
+        "(cd src/frontend && pnpm type-check && pnpm lint-check)",
+        "echo '==> browser-extension: build'",
+        "(cd src/browser-extension && pnpm build)",
+        "echo '==> verify OK'"
+      ],
+      "verify-full": [
+        "set -e",
+        "devbox run verify",
+        "devbox run tests"
+      ],
       "tests": [
         "cd src/backend",
-        "poetry run pytest -vv $1"
+        "poetry run pytest -vv --timeout=40 -o timeout_func_only=true --reruns 1 --only-rerun \"from pytest-timeout\" $1"
       ],
       "docker-app": [
         "docker compose up --build app"

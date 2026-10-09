@@ -3,7 +3,7 @@ import base64
 from datetime import datetime, timezone
 from enum import Enum
 import re
-from typing import Any, Optional, cast
+from typing import Any, List, Optional, cast
 
 import sqlalchemy as sa
 from sqlmodel import Field, Relationship, Index
@@ -11,7 +11,7 @@ from sqlmodel import SQLModel, Column, Text, JSON
 
 from ..ai_models.domain import LlmModel, LlmModelType, LlmTemperature, ReasoningEffort
 from ..core.domain import CamelCaseModel
-from ..teams.domain import Role, Team
+from ..teams.domain import Team
 from ..users.domain import User, UserListItem
 
 
@@ -47,6 +47,7 @@ class AgentUpdate(CamelCaseModel):
     team_id: Optional[int] = None
     is_protected: Optional[bool] = None
     agent_type: Optional[AgentType] = None
+    memory_enabled: Optional[bool] = None
 
 
 class Agent(BaseAgent, table=True):
@@ -68,6 +69,10 @@ class Agent(BaseAgent, table=True):
     evaluator_id: Optional[int] = Field(default=None, foreign_key="evaluator.id")
     is_protected: bool = Field(default=False)
     agent_type: AgentType = Field(default=AgentType.REACT_AGENT)
+    memory_enabled: bool = Field(
+        default=False,
+        sa_column=Column(sa.Boolean, nullable=False, server_default=sa.false()),
+    )
 
     def update_with(self, update: AgentUpdate):
         update_dict = update.model_dump(exclude_none=True)
@@ -88,10 +93,7 @@ class Agent(BaseAgent, table=True):
         return self.user_id == user.id or user.is_member_of(cast(int, self.team_id))
 
     def is_editable_by(self, user: User) -> bool:
-        return self.user_id == user.id or any(
-            tr.role in [Role.TEAM_OWNER, Role.TEAM_EDITOR] and cast(Team, tr.team).id == self.team_id
-            for tr in user.team_roles
-        )
+        return self.user_id == user.id or (self.team_id is not None and user.is_editor_of(self.team_id))
 
     def clone(self, user_id: int) -> "Agent":
         base_name = (self.name or "").strip()
@@ -114,6 +116,13 @@ class Agent(BaseAgent, table=True):
             team_id=None
         )
 
+class AgentThread(CamelCaseModel):
+    id: int
+    name: Optional[str]
+    creation: datetime
+    last_message: datetime
+
+
 class AgentListItem(BaseAgent):
     icon: Optional[str] = None
     active_users: Optional[int] = None
@@ -121,6 +130,9 @@ class AgentListItem(BaseAgent):
     is_protected: bool = False
     user: Optional[UserListItem]
     team: Optional[Team] = None
+    chats: Optional[List[AgentThread]] = None
+    has_more_chats: Optional[bool] = None
+    read_only: bool = False
 
     @staticmethod
     def from_agent(a: Agent, can_edit: bool, active_users: Optional[int] = None) -> 'AgentListItem':
@@ -132,7 +144,6 @@ class AgentListItem(BaseAgent):
         agent_dict["is_protected"] = a.is_protected
         agent_dict["team"] = a.team
         return AgentListItem.model_validate(agent_dict)
-
 
 class PublicAgent(BaseAgent):
     icon: Optional[str]
@@ -147,6 +158,7 @@ class PublicAgent(BaseAgent):
     user: Optional[UserListItem] = None
     team: Optional[Team] = None
     agent_type: AgentType = AgentType.REACT_AGENT
+    memory_enabled: bool = False
 
     @staticmethod
     def from_agent(a: Agent, can_edit: bool) -> 'PublicAgent':
@@ -181,6 +193,7 @@ class BaseAgentToolConfig(CamelCaseModel, abc.ABC):
     agent_id: int = Field(foreign_key="agent.id", primary_key=True)
     tool_id: str = Field(primary_key=True, max_length=60)
     config: dict = Field(sa_column=Column(JSON))
+    tool_metadata: Optional[dict] = Field(default=None, sa_column=Column(JSON))
 
 
 class AgentToolConfig(BaseAgentToolConfig, table=True):
@@ -193,7 +206,8 @@ class AgentToolConfig(BaseAgentToolConfig, table=True):
             draft=self.draft,
             agent_id=agent_id,
             tool_id=self.tool_id,
-            config=self.config
+            config=self.config,
+            tool_metadata=self.tool_metadata,
         )
 
 

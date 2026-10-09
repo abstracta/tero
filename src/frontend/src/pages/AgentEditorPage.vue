@@ -2,7 +2,7 @@
 import { onMounted, ref } from 'vue';
 import { useRoute, useRouter, onBeforeRouteUpdate } from 'vue-router';
 import { useI18n } from 'vue-i18n';
-import { ApiService, Thread, HttpError, TestCaseResultStatus, TestSuiteRun, TestSuiteRunStatus } from '@/services/api';
+import { ApiService, Thread, HttpError, AgentNotFoundError, TestCaseResultStatus, TestSuiteRun, TestSuiteRunStatus } from '@/services/api';
 import type { TestSuiteExecutionStreamEvent } from '@/services/api';
 import AgentTestcasePanel from '@/components/agent/AgentTestcasePanel.vue';
 import { useErrorHandler } from '@/composables/useErrorHandler';
@@ -24,7 +24,7 @@ const { testExecutionStore, loadSuiteRunResults, processStreamEvent, initializeT
 const api = new ApiService();
 const route = useRoute();
 const router = useRouter();
-const agentId = ref<number>();
+const agentId = ref<number | undefined>(Number(route.params.agentId) || undefined);
 const threadId = ref<number>();
 const showTestCaseEditor = ref<boolean>(false);
 const isEditingTestCase = ref<boolean>(true);
@@ -36,12 +36,18 @@ const isComparingResultWithTestSpec = ref<boolean>(false);
 
 const { showToolAuthModal, toolAuthType, toolId, submitAuth, closeAuth } = useToolAuthModal()
 
+const isEditorCollapsed = ref(false)
+
+const toggleEditorCollapsed = () => {
+  isEditorCollapsed.value = !isEditorCollapsed.value
+}
+
 const startChat = async () => {
   try {
     const thread = await api.startThread(agentId.value!);
     threadId.value = thread.id;
   } catch (e: unknown) {
-    if (e instanceof HttpError && e.status === 400 && e.message.includes("Agent not found")) {
+    if (e instanceof AgentNotFoundError) {
       router.push('/not-found');
     }
   }
@@ -61,6 +67,40 @@ const handleSelectExecution = async (execution: TestSuiteRun) => {
     handleError(error)
   }
   isEditingTestCase.value = false
+}
+
+const attachToSuiteRun = async (suiteRun: TestSuiteRun) => {
+  if (testExecutionStore.streamingSuiteRunId === suiteRun.id) {
+    return
+  }
+  testExecutionStore.streamingSuiteRunId = suiteRun.id
+
+  testExecutionStore.setSelectedSuiteRun(suiteRun)
+  try {
+    const results = await loadSuiteRunResults(suiteRun.agentId, suiteRun.id)
+    testExecutionStore.setSelectedResult(results[0])
+  } catch (error) {
+    if (testExecutionStore.streamingSuiteRunId === suiteRun.id) {
+      testExecutionStore.streamingSuiteRunId = undefined
+    }
+    if (testExecutionStore.selectedSuiteRun?.id === suiteRun.id) {
+      testExecutionStore.setSelectedSuiteRun(undefined)
+    }
+    throw error
+  }
+  processSuiteExecutionStream(
+    api.streamTestSuiteUpdates(suiteRun.agentId, suiteRun.id),
+    suiteRun.id,
+  )
+}
+
+const syncRunningTestSuite = async (id: number) => {
+  const suiteRuns = await api.findTestSuiteRuns(id, 1, 0)
+  const suiteRun = suiteRuns[0]
+  if (suiteRun?.status === TestSuiteRunStatus.RUNNING) {
+    await attachToSuiteRun(suiteRun)
+    isEditingTestCase.value = false
+  }
 }
 
 const processSuiteExecutionStream = async (
@@ -96,6 +136,9 @@ const processSuiteExecutionStream = async (
     }
     handleError(error)
   } finally {
+    if (testExecutionStore.streamingSuiteRunId === suiteRunId) {
+      testExecutionStore.streamingSuiteRunId = undefined
+    }
     if (testExecutionStore.selectedSuiteRun?.id === suiteRunId && testExecutionStore.selectedSuiteRun.status === TestSuiteRunStatus.RUNNING) {
       testExecutionStore.selectedSuiteRun.status = TestSuiteRunStatus.FAILURE;
       testExecutionStore.selectedSuiteRun.completedAt = new Date();
@@ -116,7 +159,10 @@ const runTestSuite = async (testCaseIds?: number[]) => {
       api
     )
     testExecutionStore.setSelectedSuiteRun(suiteRun)
-    await processSuiteExecutionStream(api.streamTestSuiteUpdates(agentId.value!, suiteRun.id), suiteRun.id)
+    if (testExecutionStore.streamingSuiteRunId !== suiteRun.id) {
+      testExecutionStore.streamingSuiteRunId = suiteRun.id
+      await processSuiteExecutionStream(api.streamTestSuiteUpdates(agentId.value!, suiteRun.id), suiteRun.id)
+    }
   } catch (error) {
     if (error instanceof AuthenticationError) {
       toast.error(
@@ -139,13 +185,7 @@ const handleRunError = async (error: unknown) => {
         { timeout: 5000, icon: false }
       )
       testRunStartedByCurrentUser.value = false
-      const suiteRuns = await api.findTestSuiteRuns(agentId.value!, 1, 0)
-      if (suiteRuns.length && suiteRuns[0].status === TestSuiteRunStatus.RUNNING) {
-        testExecutionStore.setSelectedSuiteRun(suiteRuns[0])
-        const results = await loadSuiteRunResults(agentId.value!, suiteRuns[0].id)
-        testExecutionStore.setSelectedResult(results[0])
-        await processSuiteExecutionStream(api.streamTestSuiteUpdates(agentId.value!, suiteRuns[0].id), suiteRuns[0].id)
-      }
+      await syncRunningTestSuite(agentId.value!)
     } catch (error) {
       handleError(error)
     }
@@ -188,18 +228,18 @@ const loadTestCases = async (id: number, testcaseId?: number) => {
       }
     }
 
-    const suiteRuns = await api.findTestSuiteRuns(id, 1, 0)
-    if (suiteRuns.length && suiteRuns[0].status === TestSuiteRunStatus.RUNNING) {
-      isEditingTestCase.value = false
-      testExecutionStore.setSelectedSuiteRun(suiteRuns[0])
-      const results = await loadSuiteRunResults(id, suiteRuns[0].id)
-      testExecutionStore.setSelectedResult(results[0])
-      processSuiteExecutionStream(api.streamTestSuiteUpdates(id, suiteRuns[0].id), suiteRuns[0].id)
-    }
+    await syncRunningTestSuite(id)
   } catch (e) {
     handleError(e)
   } finally {
     loadingTests.value = false
+  }
+}
+
+const onShowTestCaseEditor = (show: boolean) => {
+  showTestCaseEditor.value = show
+  if (show && agentId.value) {
+    syncRunningTestSuite(agentId.value).catch(handleError)
   }
 }
 
@@ -228,19 +268,21 @@ onBeforeRouteUpdate(async (to) => {
 </script>
 
 <template>
-  <PageLayout left-column-class="w-[calc(40%-var(--spacing)*3/2)] min-w-[670px]"
-    right-column-class="w-[calc(60%-var(--spacing)*3/2)]">
+  <PageLayout :animate-columns="false" :left-column-class="isEditorCollapsed ? '!w-16 sm:!w-20 shrink-0' : 'w-[calc(40%-var(--spacing)*3/2)] min-w-[670px] shrink-0'"
+    center-column-class="w-[calc(60%-var(--spacing)*3/2)]">
     <template #left>
-      <AgentEditorPanel v-if="threadId" :selected-thread-id="threadId"
-        @show-test-case-editor="showTestCaseEditor = $event" :loading-tests="loadingTests"
+      <AgentEditorPanel v-if="agentId" :selected-thread-id="threadId"
+        @show-test-case-editor="onShowTestCaseEditor" :loading-tests="loadingTests"
         @editing-testcase="onEditingTestCase" :editing-testcase="isEditingTestCase"
         @import-agent="loadTestCases(agentId!)" :test-cases="testCasesStore.testCases" @run-tests="runTestSuite()"
         @run-single-test="(id: number) => runTestSuite([id])" @select-execution="handleSelectExecution"
         :is-comparing-result-with-test-spec="isComparingResultWithTestSpec"
         :test-spec-messages="testCasePanel?.testSpecMessages"
-        :initial-tab="initialTab"/>
+        :initial-tab="initialTab"
+        :is-collapsed="isEditorCollapsed"
+        @toggle-collapsed="toggleEditorCollapsed" />
     </template>
-    <template #right>
+    <template #center>
       <ChatPanel :thread-id="threadId" v-if="threadId && !showTestCaseEditor" :editing-agent="true"
         @new-chat="startChat" @select-chat="handleSelectChat" />
       <AgentTestcasePanel v-if="agentId && showTestCaseEditor" :agent-id="agentId" :thread-id="threadId"

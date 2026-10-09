@@ -54,10 +54,14 @@ class UsageRepository:
         elif filtered_user_id is not None:
             return and_(
                 User.id == filtered_user_id,
-                self._get_team_filter_condition(team_id, only_accepted)
+                self._get_team_filter_condition(team_id, only_accepted),
+                not_(User.exclude_from_metrics)
             )
         else:
-            return self._get_team_filter_condition(team_id, only_accepted)
+            return and_(
+                self._get_team_filter_condition(team_id, only_accepted),
+                not_(User.exclude_from_metrics)
+            )
 
     def _get_team_filter_condition(self, team_id: int, only_accepted: bool = True) -> ColumnElement[bool] | bool:
         return col(User.team_roles).any(and_(
@@ -295,7 +299,8 @@ class UsageRepository:
             .where(
                 and_(
                     self._get_date_range_filter(ExternalAgentTimeSaving.date, from_date, to_date),
-                    external_agent_filter_condition
+                    external_agent_filter_condition,
+                    not_(User.exclude_from_metrics) if team_id != MY_TEAM_ID else True,
                 )
             )
             .group_by(col(ExternalAgentTimeSaving.external_agent_id))

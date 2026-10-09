@@ -4,6 +4,7 @@ import logging
 from ..files.domain import File, FileProcessor
 from .core import BaseFileProcessor, FileQuota
 from .domain import File, FileProcessor
+from .processors.docx import DocxFileProcessor
 from .processors.plaintext import PlainTextFileProcessor
 from .processors.spreadsheet import XlsxFileProcessor, XlsFileProcessor
 from .processors.image import ImageFileProcessor
@@ -26,6 +27,7 @@ async def extract_file_text(file: File, file_quota: FileQuota) -> str:
 def _find_file_processor(file: File) -> BaseFileProcessor:
     processors = [
         PlainTextFileProcessor(),
+        DocxFileProcessor(),
         XlsxFileProcessor(),
         XlsFileProcessor(),
         ImageFileProcessor(),

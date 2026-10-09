@@ -12,6 +12,7 @@ class FileStatus(Enum):
     PROCESSED = "PROCESSED"
     ERROR = "ERROR"
     QUOTA_EXCEEDED = "QUOTA_EXCEEDED"
+    RATE_LIMITED = "RATE_LIMITED"
 
 
 class FileProcessor(Enum):

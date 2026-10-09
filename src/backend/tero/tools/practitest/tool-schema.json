@@ -6,13 +6,8 @@
       "type": "string",
       "format": "uri",
       "description": "PractiTest MCP server URL."
-    },
-    "token": {
-      "type": "string",
-      "writeOnly": true,
-      "description": "PractiTest personal API token. Used as Bearer token to authenticate with the PractiTest MCP server."
     }
   },
-  "required": ["serverUrl", "token"],
+  "required": ["serverUrl"],
   "additionalProperties": false
 }

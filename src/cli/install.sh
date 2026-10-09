@@ -2,17 +2,7 @@
 set -e
 
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
-TERO_VERSION="${TERO_VERSION:-latest}"
-
-GITLAB_URL="https://gitlab.abstracta.us"
-GITLAB_PROJECT_ID="350"
-
-if [ -z "$GITLAB_TOKEN" ]; then
-  echo "Error: GITLAB_TOKEN is required"
-  exit 1
-fi
-
-AUTH_HEADER="PRIVATE-TOKEN: ${GITLAB_TOKEN}"
+REPO="abstracta/tero"
 
 detect_platform() {
   OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -44,22 +34,11 @@ detect_platform() {
 }
 
 download() {
-  URL="${GITLAB_URL}/api/v4/projects/${GITLAB_PROJECT_ID}/packages/generic/tero-cli/${TERO_VERSION}/${BINARY}"
+  URL="https://github.com/${REPO}/releases/latest/download/${BINARY}"
 
-  echo "Downloading tero v${TERO_VERSION} (${OS}/${ARCH})..."
+  echo "Downloading the latest tero (${OS}/${ARCH})..."
 
-  HTTP_CODE=$(curl -fL --progress-bar \
-    -H "${AUTH_HEADER}" \
-    -o /tmp/tero-download \
-    -w "%{http_code}" \
-    "$URL")
-
-  if [ "$HTTP_CODE" != "200" ]; then
-    echo "Error: download failed (HTTP $HTTP_CODE)"
-    exit 1
-  fi
-
-  mv /tmp/tero-download "${INSTALL_DIR}/tero"
+  curl -fL --progress-bar -o "${INSTALL_DIR}/tero" "$URL"
   chmod +x "${INSTALL_DIR}/tero"
 }
 
@@ -70,7 +49,7 @@ main() {
 
   echo ""
   echo "tero installed to ${INSTALL_DIR}/tero"
-  echo "  version: $(${INSTALL_DIR}/tero --version 2>/dev/null || echo "$TERO_VERSION")"
+  echo "  version: $(${INSTALL_DIR}/tero --version 2>/dev/null || echo latest)"
   echo ""
   echo "Run 'tero --help' to get started."
 }

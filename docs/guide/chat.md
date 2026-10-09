@@ -18,6 +18,22 @@ Avoid vague, multi-part requests. Break complex tasks into smaller steps and sen
 Ask the agent to use Markdown for cleaner results: headings, lists, code blocks, and especially tables. You can even say “format as a table” and then download it as CSV to use elsewhere.
 :::
 
+::: tip Styled Tables
+Tero can render tables with colored headers and cells. The agent must know the syntax first — add instructions like the following to the agent's system prompt:
+
+```markdown
+When styling table cells, use markdown-it-attrs format: append {style="..."} after the cell content. Works on both th and td.
+
+Example:
+| Col {style="background:#215C98;color:white"} | Col 2 {style="background:#215C98;color:white"} |
+|---|---|
+| value {style="background:#B5E6A2"} | normal |
+```
+
+Once configured, you can describe the styling in natural language (e.g., "blue headers, green for positive values").
+
+:::
+
 ::: tip Chat names
 Each new chat gets an automatic name from your first message. Rename it anytime so it’s easy to find later.
 :::
@@ -72,6 +88,41 @@ By default, prompts are private (only you can see them for that agent). Share a 
 ::: note 
 Team leaders where the agent is published can edit shared prompts. 
 :::
+
+### Variables
+
+Wrap a name in double braces and the prompt will ask for that value every time you use it. Pick the prompt, fill in the dialog that appears, and the completed text lands in the chat input for you to review before sending.
+
+```markdown
+Summarize the {{ Report type }} for {{ Environment | options: dev, staging, prod }}.
+```
+
+That prompt asks for two things: “Report type” as free text, and “Environment” as a dropdown limited to the three values listed.
+
+| Syntax | What you get |
+| --- | --- |
+| `{{ Variable name }}` | A text field |
+| `{{ Variable name \| options: A, B }}` | A dropdown limited to the listed values, with the first one selected |
+
+Names can include spaces, and they’re matched after trimming — `{{ Project }}` and `{{Project}}` are the same variable. Repeat one as often as you like: you’ll be asked for it once, and every occurrence gets the same value.
+
+::: note
+List no values — `{{ Environment | options: }}` — and you’ll get a text field instead. The same happens for anything the app doesn’t recognize, so a typo costs you the dropdown, not the prompt.
+:::
+
+### Escaping special characters
+
+Inside the braces, `|`, `,` and `}` carry meaning. To use one as plain text, either wrap the value in double quotes or put a backslash in front of the character:
+
+```markdown
+{{ Environment | options: "dev, staging", prod }}  <!-- an option containing a comma -->
+{{ Environment | options: dev\, staging, prod }}   <!-- the same, escaped instead of quoted -->
+{{ Region \| Zone }}                               <!-- a variable named “Region | Zone” -->
+\{{ not a variable }}                              <!-- stays in your message, nothing asked -->
+{{ Folder | options: C:\Users, D:\Data }}          <!-- any other backslash stays as typed -->
+```
+
+A backslash only escapes `|`, `,`, `}`, `"` and `{{`. Anywhere else it stays exactly as you typed it, so paths need no extra work.
 
 ## Conversation Starters
 

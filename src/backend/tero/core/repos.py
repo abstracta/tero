@@ -1,6 +1,7 @@
 from typing import Any, AsyncGenerator, Optional, cast
 
 from cryptography.fernet import Fernet
+from psycopg.pq import TransactionStatus
 from sqlalchemy import Dialect
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import QueryableAttribute
@@ -17,6 +18,20 @@ engine = create_async_engine(env.db_url)
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSession(engine, expire_on_commit=False) as session:
         yield session
+
+
+async def rollback_if_aborted(session: AsyncSession) -> None:
+    # Failed statements abort the Postgres transaction without flipping SQLAlchemy's
+    # is_active. Roll back only that aborted state so later tool calls can reuse the session.
+    if not session.in_transaction():
+        return
+    connection = await session.connection()
+    sync_connection = connection.sync_connection
+    if sync_connection is None:
+        return
+    dbapi = sync_connection.connection.dbapi_connection
+    if dbapi is not None and dbapi.info.transaction_status == TransactionStatus.INERROR:
+        await session.rollback()
 
 
 def plain_postgresql_url() -> str:

@@ -18,3 +18,10 @@ Supported file types include PDF, plain text, Markdown, and common document form
 
 Use Advanced only when the agent consistently misses or misreads content from your PDFs.
 :::
+
+::: tip Verify answers
+
+**Verify answers** is on by default. When enabled, each answer is checked against the uploaded files and source links are added, so the response stays grounded in the documents instead of invented facts. This extra pass takes longer and uses more budget.
+
+Turn it off for faster, cheaper responses. Stronger models hallucinate less, so verification matters most with smaller models or when you need cited sources.
+:::
