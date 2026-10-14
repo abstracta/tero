@@ -401,14 +401,14 @@ async def _assert_test_case_stream(resp: Response, suite_run_id: int, test_cases
             if step.execution_statuses is None:
                 expected_events.append(
                     ServerSentEvent(event="suite.test.executionStatus", data=str(json.dumps(
-                        AgentActionEvent(action=AgentAction.PRE_MODEL_HOOK).model_dump()))
+                        AgentActionEvent(action=AgentAction.PRE_MODEL_HOOK).model_dump(mode="json", by_alias=True)))
                     ).encode()
                 )
             else:
                 for status_event in step.execution_statuses:
                     expected_events.append(
                         ServerSentEvent(event="suite.test.executionStatus", data=str(json.dumps(
-                            status_event.model_dump()))
+                            status_event.model_dump(mode="json", by_alias=True)))
                         ).encode()
                     )
 
@@ -528,7 +528,7 @@ async def test_get_test_case_run_messages(client: AsyncClient):
         ThreadMessagePublic(
             id=17,
             thread_id=EXECUTION_THREAD_1_ID,
-            text="Which is the first natural number? Only provide the number",
+            text="Which is the first natural number? Only provide the number. Don't ask follow up questions",
             origin=ThreadMessageOrigin.USER,
             timestamp=parse_date("2025-02-21T12:15:00"),
             files=[]
@@ -622,7 +622,7 @@ async def test_add_test_case_message(client: AsyncClient, last_message_id: int):
         ThreadMessagePublic(
             id=11,
             thread_id=TEST_CASE_1_THREAD_ID,
-            text="Which is the first natural number? Only provide the number",
+            text="Which is the first natural number? Only provide the number. Don't ask follow up questions",
             origin=ThreadMessageOrigin.USER,
             timestamp=parse_date("2025-02-21T12:10:00"),
             files=[]
@@ -777,7 +777,7 @@ async def test_find_test_case_runs_unauthorized_agent(client: AsyncClient):
 
 @freeze_time(CURRENT_TIME)
 async def test_run_test_suite_with_specific_test_cases(client: AsyncClient, test_cases: List[PublicTestCase], last_thread_id: int, last_message_id: int, last_suite_run_id: int, last_result_id: int):
-    expected_input = "Which is the first natural number? Only provide the number"
+    expected_input = "Which is the first natural number? Only provide the number. Don't ask follow up questions"
     expected_response_chunks = ["1"]
     expected_suite_run_id = last_suite_run_id + 1
     expected_result_id = last_result_id + 1
@@ -893,7 +893,7 @@ async def test_run_test_suite_with_all_test_cases(client: AsyncClient, test_case
                     status=TestCaseResultStatus.SUCCESS,
                     steps=[
                         TestCaseStep(
-                            input="Which is the first natural number? Only provide the number",
+                            input="Which is the first natural number? Only provide the number. Don't ask follow up questions",
                             response_chunks=["1"],
                             user_message_id=last_message_id + 1,
                             agent_message_id=last_message_id + 2,
@@ -950,7 +950,7 @@ async def test_run_test_suite_with_all_test_cases(client: AsyncClient, test_case
                     status=TestCaseResultStatus.SUCCESS,
                     steps=[
                         TestCaseStep(
-                            input="Which is the first natural number? Only provide the number",
+                            input="Which is the first natural number? Only provide the number. Don't ask follow up questions",
                             response_chunks=["1"],
                             user_message_id=last_message_id + 9,
                             agent_message_id=last_message_id + 10,
@@ -1063,6 +1063,7 @@ async def test_run_test_suite_with_multi_step_test_case(client: AsyncClient, tes
 
 
 @pytest.mark.usefixtures("stub_docs_tool_generate_description")
+@docs_ingestion_timeout
 async def test_run_test_suite_with_docs_tool(
     client: AsyncClient,
     last_suite_run_id: int,

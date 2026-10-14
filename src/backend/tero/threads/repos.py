@@ -5,9 +5,11 @@ from sqlalchemy.orm import selectinload, aliased
 from sqlmodel import select, func, or_, and_, col, delete
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from ..agents.domain import Agent
+from ..agents.domain import Agent, AgentListItem, AgentThread
+from ..agents.repos import AgentRepository
 from ..core.repos import attr, scalar
 from ..files.domain import File
+from ..users.domain import User
 from .domain import Thread, ThreadListItem, ThreadMessage, ThreadMessageFile
 
 
@@ -27,11 +29,12 @@ class ThreadRepository:
         await self._db.commit()
         return thread
 
-    async def find_by_text(self, text: Optional[str], user_id: int, limit: int, agent_id: Optional[int], exclude_empty: bool = False) -> List[ThreadListItem]:
+    async def find_by_text(self, text: Optional[str], user: User, limit: int, agent_id: Optional[int], exclude_empty: bool = False,
+            offset: int = 0) -> List[ThreadListItem]:
         stmt = (
             select(Thread, func.max(ThreadMessage.timestamp).label('last_message'))
             .outerjoin(ThreadMessage, and_(ThreadMessage.thread_id == Thread.id))
-            .where(Thread.user_id == user_id,
+            .where(Thread.user_id == user.id,
                 Thread.agent_id == agent_id if agent_id is not None else True,
                 or_(col(Thread.name).ilike(f"%{text}%"),
                     col(ThreadMessage.text).ilike(f"%{text}%")) if text else True,
@@ -40,15 +43,36 @@ class ThreadRepository:
                    col(ThreadMessage.id).isnot(None) if exclude_empty else True
             )
             .group_by(col(Thread.id))
-            .order_by(func.coalesce(func.max(ThreadMessage.timestamp), Thread.creation).desc())
+            .order_by(func.coalesce(func.max(ThreadMessage.timestamp), Thread.creation).desc(), col(Thread.id).desc())
             .limit(limit)
+            .offset(offset)
             .options(
                 selectinload(attr(Thread.agent)).selectinload(attr(Agent.user)),
                 selectinload(attr(Thread.agent)).selectinload(attr(Agent.team)),
                 selectinload(attr(Thread.user)))
         )
-        ret = await self._db.exec(stmt)
-        return [ThreadListItem.from_thread(thread, last_message) for thread, last_message in ret.all()]
+        threads = (await self._db.exec(stmt)).all()
+        agents = await AgentRepository(self._db).build_agent_list_items_for_user((thread.agent for thread, _ in threads), user)
+        return [ThreadListItem.from_thread(thread, last_message, agent=agents[thread.agent_id]) for thread, last_message in threads]
+
+    async def find_latest_by_agents(self, agents: List[AgentListItem], user_id: int, limit: int) -> List[AgentListItem]:
+        last_message = func.max(ThreadMessage.timestamp)
+        agent_rank = func.row_number().over(partition_by=col(Thread.agent_id), order_by=(last_message.desc(), col(Thread.id).desc()))
+        # inner join with messages excludes empty threads
+        ranked = (
+            select(Thread, last_message.label("last_message"), agent_rank.label("agent_rank"))
+            .join(ThreadMessage, and_(ThreadMessage.thread_id == Thread.id))
+            .where(Thread.user_id == user_id, col(Thread.agent_id).in_([agent.id for agent in agents]),
+                   Thread.deleted == False, Thread.is_test_case == False)
+            .group_by(col(Thread.id))
+            .subquery())
+        thread = aliased(Thread, ranked)
+        # fetch one extra chat per agent to know if there are more
+        ret = await self._db.exec(select(thread, ranked.c.last_message).where(ranked.c.agent_rank <= limit + 1).order_by(ranked.c.agent_rank))
+        chats: dict[int, List[AgentThread]] = {agent.id: [] for agent in agents}
+        for t, last in ret.all():
+            chats[t.agent_id].append(AgentThread(id=t.id, name=t.name, creation=t.creation, last_message=last))
+        return [agent.model_copy(update={"chats": chats[agent.id][:limit], "has_more_chats": len(chats[agent.id]) > limit}) for agent in agents]
 
     async def find_by_id(self, thread_id: int, user_id: int, is_test_case: bool = False) -> Optional[Thread]:
         stmt = (
@@ -156,13 +180,15 @@ class ThreadMessageRepository:
         parents.reverse()
         return parents
 
-    async def find_by_id(self, message_id: int) -> Optional[ThreadMessage]:
-        stmt = (
-            select(ThreadMessage)
-            .where(ThreadMessage.id == message_id)
-            .options(
-                selectinload(attr(ThreadMessage.files)).selectinload(attr(ThreadMessageFile.file))
-            ))
+    async def find_by_id(self, message_id: int, user_id: Optional[int] = None) -> Optional[ThreadMessage]:
+        stmt = select(ThreadMessage).where(ThreadMessage.id == message_id)
+        if user_id is not None:
+            stmt = stmt.join(Thread, and_(ThreadMessage.thread_id == Thread.id)).where(
+                Thread.user_id == user_id,
+                Thread.deleted == False)
+        stmt = stmt.options(
+            selectinload(attr(ThreadMessage.files)).selectinload(attr(ThreadMessageFile.file))
+        )
         ret = await self._db.exec(stmt)
         return ret.one_or_none()
 
@@ -248,6 +274,22 @@ class ThreadMessageFileRepository:
             .limit(1))
         ret = await self._db.exec(stmt)
         return ret.one_or_none()
+
+    async def find_with_content_by_thread_id(self, thread_id: int) -> List[File]:
+        stmt = (
+            select(File)
+            .join(ThreadMessageFile, and_(ThreadMessageFile.file_id == File.id))
+            .join(ThreadMessage, and_(ThreadMessageFile.thread_message_id == ThreadMessage.id))
+            .where(ThreadMessage.thread_id == thread_id)
+            .order_by(col(ThreadMessage.timestamp).desc(), col(File.id).desc())
+        )
+        seen: set[int] = set()
+        files: List[File] = []
+        for file in (await self._db.exec(stmt)).all():
+            if file.id not in seen:
+                seen.add(file.id)
+                files.append(file)
+        return files
 
     async def delete(self, thread_message_file: ThreadMessageFile):
         await self._db.delete(thread_message_file)

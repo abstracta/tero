@@ -2,13 +2,10 @@ import asyncio
 from datetime import datetime, timezone
 import json
 import logging
-from typing import List, cast, Any, AsyncIterator, Tuple, Optional, Dict, Coroutine
+from typing import List, cast, Any, AsyncIterator, Tuple, Optional, Dict, Coroutine, Callable
 
-from langchain_core.callbacks import AsyncCallbackHandler
 from langgraph.errors import GraphRecursionError
 from langgraph.store.base import BaseStore
-from langchain_core.messages.ai import UsageMetadata
-from langchain_core.outputs import LLMResult
 from langchain_core.prompts import ChatPromptTemplate
 from openevals.llm import create_async_llm_as_judge
 from openevals.types import EvaluatorResult
@@ -21,9 +18,16 @@ from ...agents.evaluators.repos import EvaluatorRepository
 from ...ai_models import ai_factory
 from ...ai_models.domain import LlmModel, LlmModelType, LlmTemperature, ReasoningEffort
 from ...ai_models.repos import AiModelRepository
+from ...threads.api import preview_status_update
 from ...threads.domain import ThreadMessage, Thread, ThreadMessageOrigin, AgentMessageEvent, AgentActionEvent
+from ...threads.agents_store import (
+    agent_test_case_memory_namespace_prefix,
+    clear_store_namespace,
+    scoped_agent_memory_namespace,
+)
 from ...threads.engine import AgentEngine
 from ...threads.repos import ThreadMessageRepository, ThreadRepository
+from ...usage.callbacks import LlmUsageTrackingCallback
 from ...usage.domain import MessageUsage
 from ...usage.repos import UsageRepository
 from ..domain import Agent
@@ -59,38 +63,6 @@ EVALUATOR_DEFAULT_TEMPERATURE = LlmTemperature.NEUTRAL
 EVALUATOR_DEFAULT_REASONING_EFFORT = ReasoningEffort.MEDIUM
 
 
-class EvaluatorUsageTrackingCallback(AsyncCallbackHandler):
-    def __init__(self, usage: MessageUsage, model: LlmModel):
-        self.usage = usage
-        self.model = model
-
-    async def on_llm_end(self, response: LLMResult, **kwargs) -> None:
-         # Try to extract usage from llm_output first (most common format)
-        if hasattr(response, 'llm_output') and response.llm_output:
-            token_usage = response.llm_output.get('token_usage')
-            if token_usage:
-                self.usage.increment_with_metadata(UsageMetadata(
-                    input_tokens=token_usage.get('prompt_tokens', 0),
-                    output_tokens=token_usage.get('completion_tokens', 0),
-                    total_tokens=token_usage.get('total_tokens', 0)
-                ), self.model)
-                return
-
-        # Fallback: try to extract from generation_info
-        if response.generations:
-            for generation_list in response.generations:
-                for generation in generation_list:
-                    if hasattr(generation, 'generation_info') and generation.generation_info:
-                        token_usage = generation.generation_info.get('token_usage')
-                        if token_usage:
-                            self.usage.increment_with_metadata(UsageMetadata(
-                                input_tokens=token_usage.get('prompt_tokens', 0),
-                                output_tokens=token_usage.get('completion_tokens', 0),
-                                total_tokens=token_usage.get('total_tokens', 0)
-                            ), self.model)
-                            return
-
-
 class BackgroundTestSuiteRunner:
 
     async def _broadcast_event(self, event_db: AsyncSession, suite_run_id: int, event_type: str, data: Dict[str, Any]) -> None:
@@ -120,7 +92,7 @@ class BackgroundTestSuiteRunner:
             "evaluation": None
         })
 
-    async def _run_test_case_stream(self, db: AsyncSession, test_case: TestCase, agent: Agent, user_id: int, result: TestCaseResult, stop_event: asyncio.Event, store: BaseStore) -> AsyncIterator[Tuple[TestCaseEventType, Any]]:
+    async def _run_test_case_stream(self, db: AsyncSession, test_case: TestCase, agent: Agent, user_id: int, result: TestCaseResult, stop_event: asyncio.Event, store: BaseStore, memory_namespace: tuple[str, ...], memory_namespace_for_agent: Callable[[int], tuple[str, ...]]) -> AsyncIterator[Tuple[TestCaseEventType, Any]]:
         results_repo = TestCaseResultRepository(db)
         try:
             thread_message_repo = ThreadMessageRepository(db)
@@ -160,7 +132,8 @@ class BackgroundTestSuiteRunner:
                 actual_output = ""
 
                 async for event_type, content in self._execute_agent_with_input_stream(
-                    db, agent, user_input, user_id, execution_thread.id, execution_messages, stop_event, store
+                    db, agent, user_input, user_id, execution_thread.id, execution_messages, stop_event, store,
+                    memory_namespace, memory_namespace_for_agent,
                 ):
                     if event_type == TestCaseEventType.AGENT_MESSAGE_COMPLETE:
                         actual_output = content["text"]
@@ -233,7 +206,7 @@ class BackgroundTestSuiteRunner:
                 "evaluation": None
             })
 
-    async def _execute_agent_with_input_stream(self, db: AsyncSession, agent: Agent, user_input: str, user_id: int, thread_id: int, previous_messages: List[ThreadMessage], stop_event: asyncio.Event, store: BaseStore) -> AsyncIterator[Tuple[TestCaseEventType, Any]]:
+    async def _execute_agent_with_input_stream(self, db: AsyncSession, agent: Agent, user_input: str, user_id: int, thread_id: int, previous_messages: List[ThreadMessage], stop_event: asyncio.Event, store: BaseStore, memory_namespace: tuple[str, ...], memory_namespace_for_agent: Callable[[int], tuple[str, ...]]) -> AsyncIterator[Tuple[TestCaseEventType, Any]]:
         thread_message_repo = ThreadMessageRepository(db)
         input_message = await thread_message_repo.add(ThreadMessage(
             text=user_input,
@@ -248,7 +221,13 @@ class BackgroundTestSuiteRunner:
         })
 
         input_message_usage = MessageUsage(user_id=user_id, agent_id=agent.id, model_id=agent.model_id, message_id=input_message.id)
-        engine = AgentEngine(agent, user_id, db, store)
+        engine = AgentEngine(
+            agent,
+            user_id,
+            store,
+            memory_namespace=memory_namespace,
+            memory_namespace_for_agent=memory_namespace_for_agent,
+        )
 
         response_message = await thread_message_repo.add(ThreadMessage(
             text="",
@@ -269,7 +248,7 @@ class BackgroundTestSuiteRunner:
             async for event in engine.answer(messages_for_engine, input_message_usage, stop_event):
                 if isinstance(event, AgentActionEvent):
                     status_updates.append(event)
-                    yield (TestCaseEventType.EXECUTION_STATUS, event)
+                    yield (TestCaseEventType.EXECUTION_STATUS, preview_status_update(event.model_dump(mode="json", by_alias=True)))
                 elif isinstance(event, AgentMessageEvent):
                     complete_response += event.content
                     yield (TestCaseEventType.AGENT_MESSAGE_CHUNK, {
@@ -316,7 +295,7 @@ class BackgroundTestSuiteRunner:
         evaluator = await self._find_evaluator(db, agent, test_case)
         evaluator_model = cast(LlmModel, await llm_model_repo.find_by_id(evaluator.model_id if evaluator else cast(str, env.internal_evaluator_model)))
         evaluator_usage = MessageUsage(user_id=user_id, agent_id=agent.id, model_id=evaluator_model.id, message_id=None)
-        usage_callback = EvaluatorUsageTrackingCallback(evaluator_usage, evaluator_model)
+        usage_callback = LlmUsageTrackingCallback(evaluator_usage, evaluator_model)
 
         judge_llm = ai_factory.build_chat_model(
             evaluator_model.id,
@@ -435,25 +414,39 @@ class BackgroundTestSuiteRunner:
                         "resultId": result.id
                     })
 
-                    async for event_type, content in self._run_test_case_stream(
-                        db, test_case, agent, user_id, pending_results[test_case.thread_id], stop_event, store
-                    ):
-                        if event_type == TestCaseEventType.PHASE and content.get("phase") == "completed":
-                            status_value = content.get("status")
-                            if status_value == TestCaseResultStatus.SUCCESS.value:
-                                passed += 1
-                            elif status_value == TestCaseResultStatus.FAILURE.value:
-                                failed += 1
-                            elif status_value == TestCaseResultStatus.SKIPPED.value:
-                                skipped += 1
-                            elif status_value == TestCaseResultStatus.ERROR.value:
-                                errors += 1
-                            else:
-                                skipped += 1
+                    memory_namespace_prefix = agent_test_case_memory_namespace_prefix(
+                        user_id,
+                        suite_run.id,
+                        test_case.thread_id,
+                    )
 
-                        await self._broadcast_event(event_db, suite_run.id, f"suite.test.{event_type.value}",
-                            content.model_dump() if event_type == TestCaseEventType.EXECUTION_STATUS else content
-                        )
+                    def memory_namespace_for_agent(test_agent_id: int) -> tuple[str, ...]:
+                        return scoped_agent_memory_namespace(memory_namespace_prefix, test_agent_id)
+
+                    memory_namespace = memory_namespace_for_agent(agent.id)
+                    try:
+                        async for event_type, content in self._run_test_case_stream(
+                            db, test_case, agent, user_id, pending_results[test_case.thread_id], stop_event, store,
+                            memory_namespace, memory_namespace_for_agent,
+                        ):
+                            if event_type == TestCaseEventType.PHASE and content.get("phase") == "completed":
+                                status_value = content.get("status")
+                                if status_value == TestCaseResultStatus.SUCCESS.value:
+                                    passed += 1
+                                elif status_value == TestCaseResultStatus.FAILURE.value:
+                                    failed += 1
+                                elif status_value == TestCaseResultStatus.SKIPPED.value:
+                                    skipped += 1
+                                elif status_value == TestCaseResultStatus.ERROR.value:
+                                    errors += 1
+                                else:
+                                    skipped += 1
+
+                            await self._broadcast_event(event_db, suite_run.id, f"suite.test.{event_type.value}",
+                                content
+                            )
+                    finally:
+                        await clear_store_namespace(store, memory_namespace_prefix)
 
                     await self._broadcast_event(event_db, suite_run.id, TestSuiteEventType.TEST_COMPLETE.value, {
                         "testCaseId": test_case.thread_id,

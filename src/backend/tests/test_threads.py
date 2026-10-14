@@ -10,9 +10,10 @@ from sse_starlette import ServerSentEvent
 from .common import *
 from .common import find_last_message_id_for_thread
 
-from tero.agents.domain import AgentListItem
+from tero.agents.domain import AgentListItem, AgentUpdate
 from tero.files.domain import FileMetadata, FileProcessor, FileMetadataWithContent
-from tero.threads.api import THREADS_PATH, THREAD_PATH, THREAD_MESSAGES_PATH, THREAD_MESSAGE_PATH, THREAD_FILE_PATH
+from tero.agents.api import AGENT_PATH, AGENTS_PATH
+from tero.threads.api import THREADS_PATH, THREAD_PATH, THREAD_MESSAGES_PATH, THREAD_MESSAGE_PATH, THREAD_FILE_PATH, preview_status_update, _resolve_status_detail
 from tero.threads.domain import MAX_THREAD_NAME_LENGTH, ThreadListItem, ThreadMessageOrigin, ThreadMessagePublic
 from tero.tools.core import AgentActionEvent, AgentAction
 from tero.usage.domain import Usage, UsageType
@@ -61,6 +62,11 @@ async def test_find_all_threads_limit(client: AsyncClient, threads: List[ThreadL
     assert_response(resp, [threads[1]])
 
 
+async def test_find_all_threads_offset(client: AsyncClient, threads: List[ThreadListItem]):
+    resp = await _find_threads(client, {"limit": 1, "offset": 1})
+    assert_response(resp, [threads[0]])
+
+
 async def test_find_threads_by_text(client: AsyncClient, threads: List[ThreadListItem]):
     resp = await _find_threads(client, {"text": "another"})
     threads[1].creation = parse_date('2025-02-21T12:01:00')
@@ -70,6 +76,17 @@ async def test_find_threads_by_text(client: AsyncClient, threads: List[ThreadLis
 async def test_find_threads_by_agent_id(client: AsyncClient, threads: List[ThreadListItem]):
     resp = await _find_threads(client, {"agent_id": AGENT_ID})
     assert_response(resp, [threads[0]])
+
+
+async def test_find_pinned_agents_with_threads_pages(client: AsyncClient):
+    assert await _find_pinned_agents_with_threads(client, 0) == [(2, [OTHER_THREAD_ID])]
+    assert await _find_pinned_agents_with_threads(client, 1) == [(AGENT_ID, [THREAD_ID])]
+
+
+async def _find_pinned_agents_with_threads(client: AsyncClient, offset: int) -> List[tuple[int, List[int]]]:
+    resp = await client.get(AGENTS_PATH, params={"pinned": True, "limit": 1, "offset": offset, "thread_limit": 5})
+    resp.raise_for_status()
+    return [(agent["id"], [chat["id"] for chat in agent["chats"]]) for agent in resp.json()]
 
 
 async def test_find_threads_excluding_empty(client: AsyncClient, override_user, agents: List[AgentListItem]):
@@ -121,6 +138,65 @@ async def test_find_thread(client: AsyncClient, threads: List[ThreadListItem]):
     assert_response(resp, threads[0])
 
 
+@pytest.mark.parametrize("team_id", [None, 4], ids=["private", "other-team"])
+async def test_inaccessible_agent_thread_is_read_only(client: AsyncClient, override_user: Callable[[int], None], team_id: Optional[int]):
+    resp = await client.put(AGENT_PATH.format(agent_id=2), json=AgentUpdate(team_id=team_id).model_dump(mode="json", by_alias=True))
+    resp.raise_for_status()
+
+    override_user(OTHER_USER_ID)
+    resp = await _find_thread(4, client)
+    resp.raise_for_status()
+    assert resp.json()["agent"] == {
+        "id": 2,
+        "name": "Agent 2",
+        "description": None,
+        "lastUpdate": "2025-02-21T12:01:00",
+        "icon": None,
+        "activeUsers": None,
+        "canEdit": False,
+        "isProtected": False,
+        "user": None,
+        "team": {"id": GLOBAL_TEAM_ID, "name": "Test Team"},
+        "chats": None,
+        "hasMoreChats": None,
+        "readOnly": True,
+    }
+
+    resp = await client.put(THREAD_PATH.format(thread_id=4), json={"name": "Renamed thread"})
+    resp.raise_for_status()
+    assert resp.json()["name"] == "Renamed thread"
+
+    resp = await client.post(THREAD_MESSAGES_PATH.format(thread_id=4))
+    assert resp.status_code == status.HTTP_409_CONFLICT
+
+
+@pytest.mark.parametrize("team_id", [None, 4], ids=["private", "other-team"])
+async def test_inaccessible_agent_keeps_conversation_history(client: AsyncClient, override_user: Callable[[int], None], team_id: Optional[int]):
+    agent_id = 2
+    thread_id = 4
+    messages_path = THREAD_MESSAGES_PATH.format(thread_id=thread_id)
+    expected = [ThreadMessagePublic(
+        id=5, thread_id=thread_id, origin=ThreadMessageOrigin.USER, text="This is a message",
+        timestamp=parse_date("2025-01-20T12:04:00"),
+        children=[ThreadMessagePublic(
+            id=6, thread_id=thread_id, origin=ThreadMessageOrigin.AGENT, text="This is a response",
+            timestamp=parse_date("2025-01-20T12:05:00"), minutes_saved=60, parent_id=5)],
+    )]
+    override_user(OTHER_USER_ID)
+    assert_response(await client.get(messages_path), expected)
+
+    override_user(USER_ID)
+    resp = await client.put(AGENT_PATH.format(agent_id=agent_id), json=AgentUpdate(team_id=team_id).model_dump(mode="json", by_alias=True))
+    resp.raise_for_status()
+
+    override_user(OTHER_USER_ID)
+    assert_response(await client.get(messages_path), expected)
+
+    override_user(USER_ID)
+    resp = await client.get(messages_path)
+    assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
 async def _find_thread(thread_id: int, client: AsyncClient) -> Response:
     return await client.get(THREAD_PATH.format(thread_id=thread_id))
 
@@ -167,6 +243,18 @@ async def test_add_thread_message(last_message_id: int, client: AsyncClient, ses
     async with add_message_to_thread(client, THREAD_ID,
                                      "Which is the first natural number? Only provide the number. Don't ask follow up questions", parent_message_id=parent_message_id) as resp:
         await _assert_response(resp, "1", last_message_id + 1)
+
+
+@freeze_time(CURRENT_TIME)
+async def test_add_thread_message_with_collapsed_name(last_message_id: int, messages: List[ThreadMessagePublic], client: AsyncClient):
+    message_text = "Which is the first natural number? Only provide the number. Don't ask follow up questions"
+    collapsed_name = "Sprint summary"
+    parent_id = 1
+    async with add_message_to_thread(client, THREAD_ID, message_text, parent_message_id=parent_id, collapsed_name=collapsed_name) as resp:
+        await _assert_response(resp, "1", last_message_id + 1)
+    res = await _find_thread_messages(THREAD_ID, client)
+    messages[0].children += _build_thread_messages_response(THREAD_ID, last_message_id + 1, parent_id, message_text, "1", CURRENT_TIME, None, 0, collapsed_name=collapsed_name)
+    assert_response(res, [*messages])
 
 
 async def _assert_response(
@@ -258,7 +346,7 @@ async def _assert_response(
 async def test_add_thread_message_with_deep_agent(last_message_id: int, client: AsyncClient, session: AsyncSession):
     parent_message_id = await find_last_message_id_for_thread(OTHER_THREAD_ID, session)
     async with add_message_to_thread(client, OTHER_THREAD_ID,
-                                     "Which is the first natural number? Only provide the number", parent_message_id=parent_message_id) as resp:
+                                     "Which is the first natural number? Only provide the number. Don't ask follow up questions", parent_message_id=parent_message_id) as resp:
         await _assert_response(resp, "1", last_message_id + 1)
 
 
@@ -295,7 +383,7 @@ async def test_add_thread_message_stopped_response(last_message_id: int, client:
 async def test_add_thread_message_with_reasoning_model(last_message_id: int, client: AsyncClient, session: AsyncSession):
     parent_message_id = await find_last_message_id_for_thread(THREAD_ID, session)
     async with add_message_to_thread(client, THREAD_ID,
-                                     "Which is the first natural number? Only provide the number", parent_message_id=parent_message_id) as resp:
+                                     "Which is the first natural number? Only provide the number. Don't ask follow up questions", parent_message_id=parent_message_id) as resp:
         await _assert_response(resp, "1", last_message_id + 1)
 
 
@@ -303,7 +391,7 @@ async def test_add_thread_message_with_reasoning_model(last_message_id: int, cli
 async def test_add_thread_message_with_edition_message(last_message_id: int, client: AsyncClient, session: AsyncSession):
     parent_message_id = await find_last_message_id_for_thread(THREAD_ID, session)
     async with add_message_to_thread(client, THREAD_ID,
-                                     "Which is the first natural number? Only provide the number", parent_message_id=parent_message_id, isInAgentEdition=True) as resp:
+                                     "Which is the first natural number? Only provide the number. Don't ask follow up questions", parent_message_id=parent_message_id, isInAgentEdition=True) as resp:
         await _assert_response(resp, "1", last_message_id + 1, metadata_minutes_saved=0, message_updated_minutes_saved=None)
 
 
@@ -346,10 +434,11 @@ async def _update_thread_message(client: AsyncClient, thread_id: int, message_id
     return await client.put(THREAD_MESSAGE_PATH.format(thread_id=thread_id, message_id=message_id), json=body)
 
 
-def _build_thread_messages_response(thread_id: int, message_id: int, parent_message_id: Optional[int], message_text: str, response_text: str, timestamp: datetime, has_positive_feedback: Optional[bool], minutes_saved: Optional[int], feedback_text: Optional[str] = None) -> List[ThreadMessagePublic]:
+def _build_thread_messages_response(thread_id: int, message_id: int, parent_message_id: Optional[int], message_text: str, response_text: str, timestamp: datetime, has_positive_feedback: Optional[bool], minutes_saved: Optional[int], feedback_text: Optional[str] = None, collapsed_name: Optional[str] = None) -> List[ThreadMessagePublic]:
     return [
         ThreadMessagePublic(id=message_id, text=message_text, thread_id=thread_id,
             origin=ThreadMessageOrigin.USER,
+            collapsed_name=collapsed_name,
             timestamp=timestamp,
             parent_id=parent_message_id,
             status_updates=None,
@@ -365,7 +454,7 @@ def _build_thread_messages_response(thread_id: int, message_id: int, parent_mess
 @freeze_time(CURRENT_TIME)
 @pytest.mark.no_stub_estimate_minutes_saved
 async def test_thread_message_add_negative_feedback(last_message_id: int, client: AsyncClient, messages: List[ThreadMessagePublic], session: AsyncSession):
-    message_text = "Which is the first natural number? Only provide the number"
+    message_text = "Which is the first natural number? Only provide the number. Don't ask follow up questions"
     negative_feedback_text = "This is a negative feedback"
     minutes_saved = -15
     parent_message_id = await find_last_message_id_for_thread(THREAD_ID, session)
@@ -379,7 +468,7 @@ async def test_thread_message_add_negative_feedback(last_message_id: int, client
 
 @freeze_time(CURRENT_TIME)
 async def test_thread_message_remove_feedback(last_message_id: int, client: AsyncClient, messages: List[ThreadMessagePublic], session: AsyncSession):
-    message_text = "Which is the first natural number? Only provide the number"
+    message_text = "Which is the first natural number? Only provide the number. Don't ask follow up questions"
     parent_message_id = await find_last_message_id_for_thread(THREAD_ID, session)
     async with add_message_to_thread(client, THREAD_ID, message_text, parent_message_id=parent_message_id) as resp:
         await _assert_response(resp, "1", last_message_id + 1)
@@ -454,7 +543,7 @@ async def _find_thread_messages(thread_id: int, client: AsyncClient) -> Response
 
 @freeze_time(CURRENT_TIME)
 async def test_edit_thread_message(last_message_id: int, messages: List[ThreadMessagePublic], client: AsyncClient):
-    message_text = "Which is the first natural number? Only provide the number"
+    message_text = "Which is the first natural number? Only provide the number. Don't ask follow up questions"
     parent_id = 1
     await _add_message_to_thread(THREAD_ID, message_text, client, parent_id)
     res = await _find_thread_messages(THREAD_ID, client)
@@ -471,6 +560,7 @@ async def test_find_messages_from_invalid_thread(client: AsyncClient):
     ("number-10.png", "image/png", "What number is shown in this image?. Output just the number", "10"),
     pytest.param("Emma's routine.pdf", "application/pdf", "What time does Emma wake up according to the document? Output only the time in H:MM format. Don't use clock tool.", "7:35", marks=pytest.mark.skipif(not env.azure_doc_intelligence_key, reason="Azure Doc Intelligence not configured")),
     ("sample.txt", "text/plain; charset=ascii", "Output only the exact content of the uploaded file", "Sample test"),
+    ("sample.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "What room is mentioned in the document? Output only the room number", "204B"),
     ("users.csv", "text/csv; charset=ascii", "What is the first name of the first user? Output only the name", "Rachel"),
     ("sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "What is the 'lastname' of Dulce? Output only the lastname", "Abril"),
     ("sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "What is the 'country' of Dulce? Output only the country name", "España"),
@@ -524,7 +614,7 @@ async def _add_thread_file(thread_id: int, client: AsyncClient, parent_message_i
     return cast(dict, user_message)["files"][0]["id"]
 
 
-@pytest.mark.parametrize("model_id", ["claude-sonnet-4", "gemini-2.5-flash"])
+@pytest.mark.parametrize("model_id", ["claude-sonnet-5"])
 async def test_thread_with_model(model_id: str, last_message_id: int, client: AsyncClient, session: AsyncSession):
     resp = await client.post(f"{BASE_PATH}/agents")
     resp.raise_for_status()
@@ -606,3 +696,34 @@ async def test_download_thread_file_from_another_thread(client: AsyncClient, ses
     file_id = await _add_thread_file(OTHER_THREAD_ID, client, parent_message_id=parent_message_id)
     resp = await _download_thread_file(THREAD_ID, file_id, client)
     assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+async def test_preview_status_update_leaves_other_results_unchanged():
+    string_result = {"action": "executedTool", "result": "already short"}
+    assert preview_status_update(string_result) is string_result
+
+    planning = {"action": "planning", "result": ["docs", "docs"]}
+    assert preview_status_update(planning)["result"] == ["docs", "docs"]
+
+    short_detail = {"action": "executedTool", "result": [{"content": "hola", "title": "a.pdf"}]}
+    assert preview_status_update(short_detail)["result"] == [{"content": "hola", "title": "a.pdf"}]
+
+
+async def test_preview_status_update_truncates_content_and_adds_path():
+    content = "x" * 200
+    event = {"action": "executedTool", "result": [
+        {"content": content, "title": "a.pdf"},
+        {"content": "short", "title": "b.pdf"},
+    ]}
+    preview = preview_status_update(event)
+    assert preview["result"][0] == {"content": content[:120], "title": "a.pdf", "path": "result/0/content"}
+    assert preview["result"][1] == {"content": "short", "title": "b.pdf"}
+    assert event["result"][0]["content"] == content
+
+
+async def test_resolve_status_detail_reads_stored_content():
+    content = "x" * 200
+    updates = [{"result": [{"content": content, "title": "a.pdf"}], "args": {"query": "secret"}}]
+    assert _resolve_status_detail(updates, "0/result/0/content") == content
+    with pytest.raises(KeyError):
+        _resolve_status_detail(updates, "0/result/0/missing")

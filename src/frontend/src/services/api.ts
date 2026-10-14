@@ -14,6 +14,8 @@ export class HttpError extends Error {
   }
 }
 
+export class AgentNotFoundError extends Error {}
+
 export class ManifestAuthConfig {
   url: string
   clientId: string
@@ -31,12 +33,14 @@ export class Manifest {
   contactEmail: string
   auth: ManifestAuthConfig
   disablePublishGlobal: boolean
+  maxFileSizeMb: number
 
-  constructor(id: string, contactEmail: string, auth: ManifestAuthConfig, disablePublishGlobal: boolean) {
+  constructor(id: string, contactEmail: string, auth: ManifestAuthConfig, disablePublishGlobal: boolean, maxFileSizeMb: number) {
     this.id = id
     this.contactEmail = contactEmail
     this.auth = auth
     this.disablePublishGlobal = disablePublishGlobal
+    this.maxFileSizeMb = maxFileSizeMb
   }
 }
 
@@ -160,12 +164,26 @@ export class TeamUser extends User {
   role: Role
   roleStatus: TeamRoleStatus
   verified: boolean
+  excludeFromMetrics: boolean
+  monthlyUsdLimit?: number
 
-  constructor(id: number, name: string, username: string, role: Role, roleStatus: TeamRoleStatus, verified: boolean) {
+  constructor(id: number, name: string, username: string, role: Role, roleStatus: TeamRoleStatus, verified: boolean, excludeFromMetrics: boolean, monthlyUsdLimit?: number) {
     super(id, name, username)
     this.role = role
     this.roleStatus = roleStatus
     this.verified = verified
+    this.excludeFromMetrics = excludeFromMetrics
+    this.monthlyUsdLimit = monthlyUsdLimit
+  }
+}
+
+export class UserUpdate {
+  excludeFromMetrics?: boolean
+  monthlyUsdLimit?: number
+
+  constructor(excludeFromMetrics?: boolean, monthlyUsdLimit?: number) {
+    this.excludeFromMetrics = excludeFromMetrics
+    this.monthlyUsdLimit = monthlyUsdLimit
   }
 }
 
@@ -203,8 +221,12 @@ export class TeamRole {
 export enum Role {
   TEAM_OWNER = "owner",
   TEAM_MEMBER = "member",
-  TEAM_EDITOR = "editor"
+  TEAM_EDITOR = "editor",
+  BUDGET_OWNER = "budget_owner"
 }
+
+export const OWNER_ROLES = [Role.BUDGET_OWNER, Role.TEAM_OWNER]
+export const EDITOR_ROLES = [...OWNER_ROLES, Role.TEAM_EDITOR]
 
 export class Agent {
   id: number
@@ -224,8 +246,12 @@ export class Agent {
   fileProcessor?: FileProcessor
   isProtected: boolean
   agentType: AgentType
+  memoryEnabled: boolean
+  chats?: Omit<Thread, 'agent'>[]
+  hasMoreChats?: boolean
+  readOnly?: boolean
 
-  constructor(id: number, name?: string, description?: string, icon?: string, systemPrompt?: string, modelId?: string, temperature?: LlmTemperature, recursionLimit?: number, activeUsers?: number, lastUpdate?: Date, user?: User, canEdit?: boolean, team?: Team, fileProcessor?: FileProcessor, isProtected: boolean = false, agentType: AgentType = AgentType.REACT_AGENT) {
+  constructor(id: number, name?: string, description?: string, icon?: string, systemPrompt?: string, modelId?: string, temperature?: LlmTemperature, recursionLimit?: number, activeUsers?: number, lastUpdate?: Date, user?: User, canEdit?: boolean, team?: Team, fileProcessor?: FileProcessor, isProtected: boolean = false, agentType: AgentType = AgentType.REACT_AGENT, memoryEnabled: boolean = false) {
     this.id = id
     this.name = name
     this.description = description
@@ -242,6 +268,7 @@ export class Agent {
     this.fileProcessor = fileProcessor
     this.isProtected = isProtected
     this.agentType = agentType
+    this.memoryEnabled = memoryEnabled
   }
 }
 
@@ -249,8 +276,8 @@ export class AgentUpdate extends Agent {
   publishPrompts?: boolean
   teamId?: number | null
 
-  constructor(id: number, name?: string, description?: string, icon?: string, systemPrompt?: string, modelId?: string, temperature?: LlmTemperature, recursionLimit?: number, activeUsers?: number, lastUpdate?: Date, user?: User, canEdit?: boolean, publishPrompts?: boolean, teamId?: number | null, fileProcessor?: FileProcessor, isProtected?: boolean, agentType?: AgentType) {
-    super(id, name, description, icon, systemPrompt, modelId, temperature, recursionLimit, activeUsers, lastUpdate, user, canEdit, undefined, fileProcessor, isProtected, agentType)
+  constructor(id: number, name?: string, description?: string, icon?: string, systemPrompt?: string, modelId?: string, temperature?: LlmTemperature, recursionLimit?: number, activeUsers?: number, lastUpdate?: Date, user?: User, canEdit?: boolean, publishPrompts?: boolean, teamId?: number | null, fileProcessor?: FileProcessor, isProtected?: boolean, agentType?: AgentType, memoryEnabled?: boolean) {
+    super(id, name, description, icon, systemPrompt, modelId, temperature, recursionLimit, activeUsers, lastUpdate, user, canEdit, undefined, fileProcessor, isProtected, agentType, memoryEnabled)
     this.publishPrompts = publishPrompts
     this.teamId = teamId
   }
@@ -266,6 +293,7 @@ export interface AgentPromptUpdate {
   name?: string
   content?: string
   shared?: boolean
+  collapsed?: boolean
 }
 
 export class AgentTool {
@@ -285,12 +313,15 @@ export class AgentTool {
 export class AgentToolConfig {
   toolId: string
   config: Record<string, any>
+  toolMetadata?: Record<string, any> | null
 
-  constructor(toolId: string, config: Record<string, any>) {
+  constructor(toolId: string, config: Record<string, any>, toolMetadata?: Record<string, any> | null) {
     this.toolId = toolId
     this.config = config
+    this.toolMetadata = toolMetadata
   }
 }
+
 
 export class DocToolFile {
   id: number
@@ -345,9 +376,10 @@ export class ThreadMessage {
   hasPositiveFeedback?: boolean
   files?: UploadedFile[]
   stopped?: boolean
+  collapsedName?: string
   statusUpdates: StatusUpdate[] = []
 
-  constructor(id: number, text: string, timestamp: Date, origin: ThreadMessageOrigin, children: ThreadMessage[], minutesSaved?: number, feedbackText?: string, hasPositiveFeedback?: boolean, stopped?: boolean, statusUpdates?: StatusUpdate[]) {
+  constructor(id: number, text: string, timestamp: Date, origin: ThreadMessageOrigin, children: ThreadMessage[], minutesSaved?: number, feedbackText?: string, hasPositiveFeedback?: boolean, stopped?: boolean, statusUpdates?: StatusUpdate[], collapsedName?: string) {
     this.id = id
     this.text = text
     this.timestamp = timestamp
@@ -358,6 +390,7 @@ export class ThreadMessage {
     this.hasPositiveFeedback = hasPositiveFeedback
     this.stopped = stopped
     this.statusUpdates = statusUpdates || []
+    this.collapsedName = collapsedName
   }
 }
 
@@ -665,9 +698,27 @@ export const findManifest = async (): Promise<Manifest> => {
 
 export interface AgentImportResult {
   unavailableTools: string[]
+  unavailableSubagents: string[]
   toolsRequiringAuthentication: string[]
   unavailableModel?: string
   defaultModel?: string
+}
+
+function isAgentNotFoundResponse(error: unknown): error is HttpError {
+  return (
+    error instanceof HttpError &&
+    (error.status === 400 || error.status === 409) &&
+    httpErrorBody(error) === 'Agent not found'
+  )
+}
+
+export function httpErrorBody(error: HttpError): string {
+  try {
+    const parsed = JSON.parse(error.body)
+    return typeof parsed?.detail === 'string' ? parsed.detail : error.body
+  } catch {
+    return error.body
+  }
 }
 
 export class ApiService {
@@ -720,8 +771,8 @@ export class ApiService {
     }
   }
 
-  async findUserAgents(text: string = ''): Promise<Agent[]> {
-    return await this.fetchJson(`/agents?pinned=true&text=${encodeURIComponent(text)}`)
+  async findUserAgents(text: string = '', limit?: number, offset: number = 0, threadLimit?: number): Promise<Agent[]> {
+    return await this.fetchJson(`/agents?pinned=true&text=${encodeURIComponent(text)}` + (limit ? `&limit=${limit}&offset=${offset}` : '') + (threadLimit ? `&thread_limit=${threadLimit}` : ''))
   }
 
   async findOwnAgents(limit: number, offset: number = 0): Promise<Agent[]> {
@@ -812,6 +863,10 @@ export class ApiService {
 
   async configureAgentTool(agentId: number, config: AgentToolConfig): Promise<AgentToolConfig> {
     return await this.post(`/agents/${agentId}/tools`, config)
+  }
+
+  async syncAgentTool(agentId: number, toolId: string): Promise<AgentToolConfig> {
+    return await this.post(`/agents/${agentId}/tools/${toolId}/sync`)
   }
 
   async removeAgentToolConfig(agentId: number, toolId: string) {
@@ -983,8 +1038,10 @@ export class ApiService {
     return await this.fetchJson(`/agents/${agentId}/tests/runs/${suiteRunId}/results/${resultId}/messages`)
   }
 
-  async findLastChats(limit: number, excludeEmpty: boolean = false): Promise<Thread[]> {
-    return await this.fetchJson(`/threads?limit=${limit}&exclude_empty=${excludeEmpty}`)
+  async findLastChats(limit: number, excludeEmpty: boolean = false, agentId?: number, offset: number = 0): Promise<Thread[]> {
+    const searchParams = new URLSearchParams({ limit: limit.toString(), exclude_empty: excludeEmpty.toString(), offset: offset.toString() });
+    if (agentId !== undefined) searchParams.set('agent_id', agentId.toString());
+    return await this.fetchJson(`/threads?${searchParams.toString()}`)
   }
 
   async findChatsByText(text: string, limit: number, excludeEmpty: boolean = false, agentId?: number): Promise<Thread[]> {
@@ -992,7 +1049,12 @@ export class ApiService {
   }
 
   async startThread(agentId: number): Promise<Thread> {
-    return await this.post(`/threads`, { agentId: agentId })
+    try {
+      return await this.post(`/threads`, { agentId: agentId })
+    } catch (error) {
+      if (isAgentNotFoundResponse(error)) throw new AgentNotFoundError()
+      throw error
+    }
   }
 
   async findThread(threadId: number): Promise<Thread> {
@@ -1001,6 +1063,11 @@ export class ApiService {
 
   async findThreadMessages(threadId: number): Promise<ThreadMessage[]> {
     return await this.fetchJson(`/threads/${threadId}/messages`)
+  }
+
+  async findThreadMessageDetail(messageId: number, path: string): Promise<{ value: string }> {
+    const params = new URLSearchParams({ path })
+    return await this.fetchJson(`/threads/messages/${messageId}/detail?${params}`)
   }
 
   async findThreadMessageFile(threadId: number, fileId: number): Promise<ThreadMessageFile> {
@@ -1081,12 +1148,13 @@ export class ApiService {
     await this.post(`/threads/${threadId}/stop`)
   }
 
-  async *sendMessage(threadId: number, text: string, files?: UploadedFile[], parentMessageId?: number, isInAgentEdition?: boolean): AsyncIterable<ThreadMessagePart> {
+  async *sendMessage(threadId: number, text: string, files?: UploadedFile[], parentMessageId?: number, isInAgentEdition?: boolean, collapsedName?: string): AsyncIterable<ThreadMessagePart> {
     const url = `/threads/${threadId}/messages`
 
     const formData = new FormData()
     formData.append('text', text)
     formData.append('origin', 'USER')
+    if (collapsedName) formData.append('collapsedName', collapsedName)
     if (parentMessageId != null) formData.append('parentMessageId', parentMessageId.toString())
     if (isInAgentEdition != null) formData.append('isInAgentEdition', isInAgentEdition.toString())
     if (files) {
@@ -1100,7 +1168,13 @@ export class ApiService {
       }
       formData.append('fileIds', fileIds.join(','))
     }
-    const resp = await this.fetch(url, 'POST', formData, true)
+    let resp: Response
+    try {
+      resp = await this.fetch(url, 'POST', formData, true)
+    } catch (error) {
+      if (isAgentNotFoundResponse(error)) throw new AgentNotFoundError()
+      throw error
+    }
 
     const contentType = resp.headers.get('content-type')
     if (contentType?.startsWith('text/event-stream')) {
@@ -1133,10 +1207,13 @@ export class ApiService {
             status: {
               action: part.data.action,
               toolName: part.data.toolName,
+              agentName: part.data.agentName,
               step: part.data.step,
               description: part.data.description,
               args: part.data.args,
-              result: part.data.result
+              argsPath: part.data.argsPath,
+              result: part.data.result,
+              errorId: part.data.errorId
             }
           }
         }
@@ -1158,15 +1235,16 @@ export class ApiService {
 
   private async *fetchSSEStream<T = any>(resp: Response, url: string): AsyncIterable<SSEPayload<T>> {
     const reader = resp.body!.getReader()
-    let done = false
+    const decoder = new TextDecoder('utf-8')
+    let leftover = ''
 
-    while (!done) {
-      const { value, done: readerDone } = await reader.read()
-      done = readerDone
-      if (!value) return
+    while (true) {
+      const { value, done } = await reader.read()
+      leftover += decoder.decode(value ?? new Uint8Array(), { stream: !done })
+      const parsed = ServerSentEvent.parseBuffer(leftover, done)
+      leftover = parsed.leftover
 
-      const events = ServerSentEvent.fromBytes(value)
-      for (const ev of events) {
+      for (const ev of parsed.events) {
         if (ev.event === 'error') {
           console.warn(`Error event sent by server in response to ${url}`, ev)
           throw new HttpError(resp.status, ev.data)
@@ -1179,6 +1257,7 @@ export class ApiService {
           data: ev.event && ev.data ? (JSON.parse(ev.data) as T) : (ev.data as T)
         }
       }
+      if (done) break
     }
   }
 
@@ -1245,6 +1324,10 @@ export class ApiService {
     await this.put(`/teams/${teamId}/users/${userId}`, { role })
   }
 
+  async updateUser(userId: number, update: UserUpdate): Promise<UserUpdate> {
+    return await this.put(`/users/${userId}`, update)
+  }
+
   async deleteUserFromTeam(teamId: number, userId: number): Promise<void> {
     await this.delete(`/teams/${teamId}/users/${userId}`)
   }
@@ -1289,10 +1372,13 @@ export class ThreadMessagePart {
   status?: {
     action: string
     toolName?: string
+    agentName?: string
     step?: string
     description?: string
     args?: string
-    result?: string | string[]
+    argsPath?: string
+    result?: StatusUpdate['result']
+    errorId?: string
   }
 }
 
@@ -1312,17 +1398,34 @@ class ServerSentEvent {
     this.event = event
   }
 
-  public static fromBytes(bs: Uint8Array): ServerSentEvent[] {
-    const text = new TextDecoder('utf-8').decode(bs)
-    const events = text.split(/\r\n\r\n/)
-    return events.map((e) => ServerSentEvent.parseEvent(e))
+  public static parseBuffer(buffer: string, flush = false): { events: ServerSentEvent[], leftover: string } {
+    // SSE events end on a blank line. Line endings may be CRLF, LF, or CR.
+    // Hold a trailing CR (unless it already completes \r\r) so a following LF can finish CRLF.
+    let work = buffer
+    let suffix = ''
+    if (!flush && work.endsWith('\r') && !work.endsWith('\r\r')) {
+      work = work.slice(0, -1)
+      suffix = '\r'
+    }
+    work = work.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+    const parts = work.split('\n\n')
+    const leftover = (parts.pop() ?? '') + suffix
+    const events = parts.filter((e) => e.trim()).map((e) => ServerSentEvent.parseEvent(e))
+    if (flush && leftover.trim()) {
+      events.push(ServerSentEvent.parseEvent(leftover))
+    }
+    if (flush) {
+      return { events, leftover: '' }
+    }
+    return { events, leftover }
   }
 
   private static parseEvent(event: string): ServerSentEvent {
-    const parts = event.split(/\r\n/)
+    const parts = event.split(/\r\n|\n|\r/)
+    while (parts[0] === '') parts.shift()
     let eventType
     const eventPrefix = 'event: '
-    if (parts[0].startsWith(eventPrefix)) {
+    if (parts[0]?.startsWith(eventPrefix)) {
       eventType = parts[0].substring(eventPrefix.length)
     }
     const dataPrefix = 'data: '

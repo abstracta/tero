@@ -13,6 +13,7 @@ const props = defineProps<{
   toolId: string
   configuredTool: boolean
   contactEmail?: string
+  maxFileSizeMb?: number
   viewMode?: boolean
   allowedExtensions?: string[]
   maxFiles?: number
@@ -24,7 +25,7 @@ const { t } = useI18n()
 const api = new ApiService()
 const { handleError } = useErrorHandler()
 
-const defaultAllowedExtensions = ['pdf', 'txt', 'md', 'csv', 'xlsx', 'xls']
+const defaultAllowedExtensions = ['pdf', 'txt', 'md', 'csv', 'xlsx', 'xls', 'docx']
 const allowedExtensions = computed(() => props.allowedExtensions ?? defaultAllowedExtensions)
 const attachedFilesError = ref({
   title: '',
@@ -126,7 +127,11 @@ const updateToolFilesWithUploadedFiles = (file: UploadedFile) => {
 const uploadFile = async (file: UploadedFile) => {
   try {
     if (file.id) {
-      await api.updateAgentToolFile(props.agentId, props.toolId, file.id, file.file!)
+      // file.file is only set when a new blob was just picked in this session (e.g. drag & drop replace).
+      // Retrying a file loaded from the server (loadFiles()) has no blob, so send an empty file
+      // to make the backend reprocess the existing content.
+      const content = file.file ?? new File([], file.name, { type: file.contentType })
+      await api.updateAgentToolFile(props.agentId, props.toolId, file.id, content)
     } else {
       const configuredFile = await api.uploadAgentToolFile(props.agentId, props.toolId, file.file!)
       file.id = configuredFile.id
@@ -165,12 +170,12 @@ const viewFile = (file: UploadedFile) => {
   window.open(`/agents/${props.agentId}/tools/${props.toolId}/files/${file.id}${props.viewMode ? '?readOnly=true' : ''}`, '_blank')
 }
 
-const filteredFiles = computed(() => props.viewMode ? toolFiles.value.filter(f => f.status === FileStatus.PROCESSED || f.status === FileStatus.QUOTA_EXCEEDED) : toolFiles.value)
+const filteredFiles = computed(() => props.viewMode ? toolFiles.value.filter(f => f.status === FileStatus.PROCESSED || f.status === FileStatus.QUOTA_EXCEEDED || f.status === FileStatus.RATE_LIMITED) : toolFiles.value)
 
 </script>
 
 <template>
-  <div class="flex flex-col gap-4 my-1 pb-6">
+  <div class="flex flex-col gap-4 my-1">
     <div ref="fileListRef" class="flex flex-col gap-2 max-h-55 overflow-y-auto">
       <div class="flex flex-col gap-2 text-sm text-content-muted" v-if="!filteredFiles.length">{{ t('noUploadedFiles') }}</div>
       <div class="flex flex-col gap-2 text-sm" v-else>
@@ -183,9 +188,10 @@ const filteredFiles = computed(() => props.viewMode ? toolFiles.value.filter(f =
             <div v-if="(f.status == FileStatus.PENDING || isDeletingFile(f))"><IconLoader class="animate-spin"/></div>
             <div v-if="f.status == FileStatus.ERROR && !isDeletingFile(f)" class="flex flex-row items-center gap-2 cursor-default" v-tooltip.bottom="t('errorUploadingFileTooltip')"><IconAlertTriangle class="text-error-alt" /> {{ t('errorUploadingFile') }}</div>
             <div v-if="f.status == FileStatus.QUOTA_EXCEEDED && !isDeletingFile(f)" class="flex flex-row items-center gap-2 cursor-default" v-tooltip.bottom="t('quotaExceededTooltip', { support: contactEmail })"><IconAlertTriangle class="text-error-alt" /> {{ t('quotaExceeded') }}</div>
+            <div v-if="f.status == FileStatus.RATE_LIMITED && !isDeletingFile(f)" class="flex flex-row items-center gap-2 cursor-default" v-tooltip.bottom="t('rateLimitedTooltip')"><IconAlertTriangle class="text-error-alt" /> {{ t('rateLimited') }}</div>
             <div v-if="!isDeletingFile(f)" class="flex flex-row gap-2 border-l pl-2">
-              <SimpleIcon interactive v-if="f.status == FileStatus.PROCESSED || f.status == FileStatus.QUOTA_EXCEEDED" @click="viewFile(f)" v-tooltip.bottom="t('viewFileTooltip')" :icon="IconEye"/>
-              <SimpleIcon interactive v-if="(f.status == FileStatus.ERROR || f.status == FileStatus.QUOTA_EXCEEDED)" @click="tryAgainFileUpload(f)" v-tooltip.bottom="t('tryAgainTooltip')" :icon="IconRefresh"/>
+              <SimpleIcon interactive v-if="f.status == FileStatus.PROCESSED || f.status == FileStatus.QUOTA_EXCEEDED || f.status == FileStatus.RATE_LIMITED" @click="viewFile(f)" v-tooltip.bottom="t('viewFileTooltip')" :icon="IconEye"/>
+              <SimpleIcon interactive v-if="(f.status == FileStatus.ERROR || f.status == FileStatus.QUOTA_EXCEEDED || f.status == FileStatus.RATE_LIMITED)" @click="tryAgainFileUpload(f)" v-tooltip.bottom="t('tryAgainTooltip')" :icon="IconRefresh"/>
               <SimpleIcon interactive v-if="f.status != FileStatus.PENDING && !viewMode" @click="removeFile(f)" v-tooltip.bottom="t('removeFileTooltip')" :icon="IconTrashX"/>
             </div>
           </div>
@@ -193,7 +199,7 @@ const filteredFiles = computed(() => props.viewMode ? toolFiles.value.filter(f =
       </div>
       <GradientBottom padding="small" v-if="filteredFiles.length >= 5" />
     </div>
-    <FileInput v-if="!viewMode" showLabel :attachedFiles="toolFiles" :allowedExtensions="allowedExtensions" :maxFiles="maxFiles" @error="attachedFilesError = $event" @files-change="handleFileChange" />
+    <FileInput v-if="!viewMode" showLabel :attachedFiles="toolFiles" :allowedExtensions="allowedExtensions" :maxFiles="maxFiles" :maxFileSizeMb="maxFileSizeMb" @error="attachedFilesError = $event" @files-change="handleFileChange" />
     <ErrorBox :error="attachedFilesError" />
   </div>
 </template>
@@ -208,7 +214,9 @@ const filteredFiles = computed(() => props.viewMode ? toolFiles.value.filter(f =
       "errorUploadingFile": "Error uploading file",
       "errorUploadingFileTooltip": "Something went wrong while uploading this file. Please try again.",
       "quotaExceededTooltip": "You have reached the monthly usage quota. Contact {support} to increase your monthly quota or wait for the next month.",
-      "quotaExceeded": "Quota limit exceeded"
+      "quotaExceeded": "Quota limit exceeded",
+      "rateLimitedTooltip": "The AI model is currently experiencing high demand. Try again in a few moments.",
+      "rateLimited": "Rate limit exceeded"
     },
     "es": {
       "noUploadedFiles": "No hay archivos subidos",
@@ -218,7 +226,9 @@ const filteredFiles = computed(() => props.viewMode ? toolFiles.value.filter(f =
       "errorUploadingFile": "Error al subir archivo",
       "errorUploadingFileTooltip": "Algo salió mal al subir este archivo. Por favor, inténtalo de nuevo.",
       "quotaExceededTooltip": "Ha alcanzado la cuota de uso mensual. Contacte a {support} para aumentar su cuota mensual o espere al próximo mes.",
-      "quotaExceeded": "Límite de cuota excedido"
+      "quotaExceeded": "Límite de cuota excedido",
+      "rateLimitedTooltip": "El modelo de IA está experimentando alta demanda. Intenta de nuevo en unos instantes.",
+      "rateLimited": "Modelo saturado"
     }
   }
 </i18n>

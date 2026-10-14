@@ -63,6 +63,8 @@ COPY --from=frontend-builder /app/frontend/dist ./frontend
 
 RUN chmod +x wait-for-it.sh entrypoint.sh
 ENV FRONTEND_PATH=frontend
+ENV BROWSER_TOOL_PLAYWRIGHT_OUTPUT_DIR=/tmp/playwright-output
+ENV CODEBASE_TOOL_REPOS_PATH=/data/codebase-repos
 
 ENTRYPOINT [ "./entrypoint.sh" ]
 

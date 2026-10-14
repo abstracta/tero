@@ -2,13 +2,16 @@ from http import HTTPMethod
 import logging
 from typing import Any, Optional
 
+from pydantic import model_validator
 from sqlmodel import Field, SQLModel, and_, select, delete
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from ...core.env import env
 from ...core.repos import scalar
 from ..auth import ToolAuthCallback
 from ..core import load_schema
-from ..openapi_tool import OAuthOpenApiTool, OAuthToolConfig
+from ..oauth_tool import OAuthToolConfig
+from ..openapi_tool import OAuthOpenApiTool
 
 
 logger = logging.getLogger(__name__)
@@ -47,6 +50,22 @@ class JiraTool(OAuthOpenApiTool):
     name: str = "Jira"
     description: str = "Manage issues and track project activity"
     config_schema: dict = load_schema(__file__)
+    _oauth_scopes_path = "security.OAuth2"
+
+    @model_validator(mode="after")
+    def hide_oauth_config_when_env_set(self):
+        if self._env_oauth_configured():
+            for key in ("clientId", "clientSecret"):
+                self.config_schema["properties"].pop(key, None)
+                if key in self.config_schema.get("required", []):
+                    self.config_schema["required"].remove(key)
+        return self
+
+    def _env_client_id(self) -> Optional[str]:
+        return env.jira_tool_client_id
+
+    def _env_client_secret(self) -> Optional[str]:
+        return env.jira_tool_client_secret.get_secret_value() if env.jira_tool_client_secret else None
 
     def _oauth_config(self) -> OAuthToolConfig:
         return OAuthToolConfig(
@@ -73,7 +92,7 @@ class JiraTool(OAuthOpenApiTool):
         jira_config = await repo.find_by_agent_id(self.agent.id)
         if jira_config:
             return jira_config.cloud_id
-        resp = await self._invoke_rest_api(HTTPMethod.GET, f"{JIRA_BASE_API_URL}/oauth/token/accessible-resources")
+        resp, _ = await self._invoke_rest_api_raising_http(HTTPMethod.GET, f"{JIRA_BASE_API_URL}/oauth/token/accessible-resources")
         ret = next(resource["id"] for resource in resp)
         await repo.save(JiraToolConfig(agent_id=self.agent.id, cloud_id=ret))
         return ret
@@ -102,8 +121,11 @@ class JiraTool(OAuthOpenApiTool):
             issues_path, issue_path, f"{issue_path}/assignee", f"{issue_path}/changelog", 
             comments_path, f"{comments_path}/{{id}}", properties_path, f"{properties_path}/{{propertyKey}}", f"{issue_path}/transitions", 
             f"{search_path}/approximate-count", f"{search_path}/jql", f"{projects_path}/search",
-            f"{base_path}/myself", f"{base_path}/users/search"] \
-                or (method == "get" and path in [f"{project_path}", f"{project_path}/statuses"])
+            f"{base_path}/myself", f"{base_path}/users/search", f"{base_path}/groupuserpicker"] \
+                or (method == "get" and path in [
+                    f"{project_path}", f"{project_path}/statuses", f"{project_path}/components",
+                    f"{base_path}/component/{{id}}",
+                ])
     
     def _handle_schema_without_type(self, schema: dict, schemas: dict, refs: set) -> None:
         # Fix Jira schema which does not properly define the schema for comments.

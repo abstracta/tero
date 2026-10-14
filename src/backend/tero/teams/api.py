@@ -10,7 +10,7 @@ from ..core.env import env
 from ..core.repos import get_db
 from ..users.domain import User
 from ..users.repos import UserRepository
-from .domain import GLOBAL_TEAM_ID, AddUsersToTeam, Role, TeamRole, TeamRoleStatus,\
+from .domain import GLOBAL_TEAM_ID, OWNER_ROLES, AddUsersToTeam, Role, TeamRole, TeamRoleStatus,\
     TeamRoleUpdate, TeamUser, TeamCreate, Team, TeamUpdate
 from .repos import TeamRepository
 
@@ -25,7 +25,7 @@ TEAM_PATH = f"{TEAMS_PATH}/{{team_id}}"
 async def get_team_users(team_id: int, user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)], limit: Optional[int] = None, offset: Optional[int] = None, search: Optional[str] = None) -> List[TeamUser]:
     await _find_team(team_id, TeamRepository(db))
     await _check_team_owner(team_id, user)
-    return await TeamRepository(db).find_team_users(team_id, limit, offset, search)
+    return await TeamRepository(db).find_team_users(team_id, user, limit, offset, search)
 
 
 @router.get(TEAMS_PATH, status_code=status.HTTP_200_OK)
@@ -41,7 +41,7 @@ async def create_team(team: TeamCreate, user: Annotated[User, Depends(get_curren
     repo = TeamRepository(db)
     created = await repo.add(Team(name=team.name))
     if team.users:
-        await _add_users_to_team(created.id, team.users, db, user.id)
+        await _add_users_to_team(created.id, team.users, db, user)
     return created
 
 
@@ -66,10 +66,24 @@ async def delete_team(team_id: int, user: Annotated[User, Depends(get_current_us
 
 
 async def _check_team_owner(team_id: int, user: User) -> None:
-    if any(tr.role == Role.TEAM_OWNER and (tr.team_id == team_id or tr.team_id == GLOBAL_TEAM_ID) for tr in user.team_roles):
+    if any(
+        tr.role in OWNER_ROLES
+        and tr.status == TeamRoleStatus.ACCEPTED
+        and (tr.team_id == team_id or tr.team_id == GLOBAL_TEAM_ID)
+        for tr in user.team_roles
+    ):
         return
-    
+
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+
+def _check_can_assign_budget_owner(role: Role, team_id: int, user: User, current_role: Optional[Role] = None) -> None:
+    if role == Role.BUDGET_OWNER or current_role == Role.BUDGET_OWNER:
+        if role == Role.BUDGET_OWNER and team_id != GLOBAL_TEAM_ID:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Budget owner role can only be assigned in the global team")
+        if not user.is_budget_owner():
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Budget owner access required to modify the budget owner role")
+
 
 async def _check_global_team(team_id: int) -> None:
     if team_id == GLOBAL_TEAM_ID:
@@ -87,24 +101,36 @@ async def _find_team(team_id: int, repo: TeamRepository) -> Team:
 async def add_users_to_team(team_id: int, new_users: List[AddUsersToTeam], user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]) -> List[TeamUser]:
     await _find_team(team_id, TeamRepository(db))
     await _check_team_owner(team_id, user)
-    return await _add_users_to_team(team_id, new_users, db, user.id)
+    return await _add_users_to_team(team_id, new_users, db, user)
 
-async def _add_users_to_team(team_id: int, new_users: List[AddUsersToTeam], db: Annotated[AsyncSession, Depends(get_db)], user_id: int) -> List[TeamUser]:
+
+async def _add_users_to_team(team_id: int, new_users: List[AddUsersToTeam], db: Annotated[AsyncSession, Depends(get_db)], user: User) -> List[TeamUser]:
     users_repo = UserRepository(db)
     team_repo = TeamRepository(db)
     added_users = []
-    
+
     for new_user in new_users:
         found_user = await users_repo.find_by_username(new_user.username)
         if found_user is None:
             found_user = await users_repo.create_user(User(username=new_user.username, monthly_usd_limit=env.monthly_usd_limit_default))
+        current_role = next((tr.role for tr in found_user.team_roles if tr.team_id == team_id), None)
+        _check_can_assign_budget_owner(new_user.role, team_id, user, current_role)
         if team_id == GLOBAL_TEAM_ID and new_user.role == Role.TEAM_MEMBER:
             continue
-        user_status = TeamRoleStatus.ACCEPTED if (user_id and found_user.id == user_id) or (team_id == GLOBAL_TEAM_ID and new_user.role == Role.TEAM_OWNER) else TeamRoleStatus.PENDING
+        user_status = TeamRoleStatus.ACCEPTED if (user.id and found_user.id == user.id) or (team_id == GLOBAL_TEAM_ID and new_user.role in OWNER_ROLES) else TeamRoleStatus.PENDING
         await team_repo.save_team_role(TeamRole(user_id=found_user.id, team_id=team_id, role=new_user.role, status=user_status))
-        
-        added_users.append(TeamUser(id=found_user.id, username=found_user.username, name=found_user.name, role=new_user.role, role_status=user_status, verified=found_user.name is not None))
-    
+
+        added_users.append(TeamUser(
+            id=found_user.id,
+            username=found_user.username,
+            name=found_user.name,
+            role=new_user.role,
+            role_status=user_status,
+            verified=found_user.name is not None,
+            exclude_from_metrics=found_user.exclude_from_metrics,
+            monthly_usd_limit=found_user.monthly_usd_limit if user.is_budget_owner() else None,
+        ))
+
     return added_users
 
 TEAM_USER_PATH = f"{TEAM_USERS_PATH}/{{user_id}}"
@@ -112,8 +138,10 @@ TEAM_USER_PATH = f"{TEAM_USERS_PATH}/{{user_id}}"
 
 @router.put(TEAM_USER_PATH)
 async def update_user_role_in_team(team_id: int, user_id: int, request: TeamRoleUpdate, user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
-    await _find_user(user_id, db)
+    target_user = await _find_user(user_id, db)
     await _check_team_owner(team_id, user)
+    current_role = next((tr.role for tr in target_user.team_roles if tr.team_id == team_id), None)
+    _check_can_assign_budget_owner(request.role, team_id, user, current_role)
     repo = TeamRepository(db)
     if team_id == GLOBAL_TEAM_ID and request.role == Role.TEAM_MEMBER:
         await repo.delete_team_role(team_id, user_id)

@@ -17,6 +17,7 @@ from tero.files.domain import FileMetadata, FileStatus, File, FileProcessor
 from tero.threads.domain import ThreadMessageOrigin, Thread, ThreadMessagePublic
 from tero.tools.browser import BROWSER_TOOL_ID
 from tero.tools.docs import DOCS_TOOL_ID
+from tero.tools.subagent import SUBAGENT_TOOL_ID
 from tero.tools.web import WEB_TOOL_ID
 from tero.users.domain import UserListItem
 
@@ -27,7 +28,7 @@ async def test_import_exported_minimal_agent(users: List[UserListItem], client: 
     zip_file_content = await _export_agent(source_agent_id, client)
     target_agent_id = await _create_agent(client)
     result = await _import_agent(target_agent_id, zip_file_content, client)
-    assert result == {"unavailableTools": [], "toolsRequiringAuthentication": [], "unavailableModel": None, "defaultModel": None}
+    assert result == {"unavailableTools": [], "unavailableSubagents": [], "toolsRequiringAuthentication": [], "unavailableModel": None, "defaultModel": None}
     resp = await _find_agent(target_agent_id, client)
     assert_response(resp, PublicAgent(
         id=target_agent_id, name=f"Agent #{source_agent_id}", description="", last_update=CURRENT_TIME, user_id=USER_ID,
@@ -39,7 +40,7 @@ async def test_import_exported_minimal_agent(users: List[UserListItem], client: 
 async def test_import_exported_agent_preserves_advanced_settings(users: List[UserListItem], client: AsyncClient):
     source_agent_id = await _create_agent(client)
     await _update_agent(source_agent_id, AgentUpdate(
-        recursion_limit=50, agent_type=AgentType.DEEP_AGENT, is_protected=True), client)
+        recursion_limit=50, agent_type=AgentType.DEEP_AGENT, memory_enabled=False, is_protected=True), client)
     zip_file_content = await _export_agent(source_agent_id, client)
     target_agent_id = await _create_agent(client)
     await _import_agent(target_agent_id, zip_file_content, client)
@@ -48,7 +49,53 @@ async def test_import_exported_agent_preserves_advanced_settings(users: List[Use
         id=target_agent_id, name=f"Agent #{source_agent_id}", description="", last_update=CURRENT_TIME, user_id=USER_ID,
         model_id=cast(str, env.agent_default_model), system_prompt=DEFAULT_SYSTEM_PROMPT, temperature=LlmTemperature.NEUTRAL,
         reasoning_effort=ReasoningEffort.LOW, recursion_limit=50, icon=None, can_edit=True, user=users[0],
-        is_protected=True, agent_type=AgentType.DEEP_AGENT))
+        is_protected=True, agent_type=AgentType.DEEP_AGENT, memory_enabled=False))
+
+
+@freeze_time(CURRENT_TIME)
+async def test_import_exported_agent_preserves_collapsed_prompts(last_prompt_id: int, client: AsyncClient):
+    prompts = [
+        AgentPromptCreate(name="Collapsed starter", content="Starter text", shared=True, starter=True, collapsed=True),
+        AgentPromptCreate(name="Collapsed", content="Collapsed text", shared=False, collapsed=True),
+        AgentPromptCreate(name="Expanded", content="Expanded text", shared=True, collapsed=False),
+    ]
+    source_agent_id = await _create_agent(client)
+    for prompt in prompts:
+        await _add_agent_prompt(source_agent_id, prompt, client)
+    target_agent_id = await _create_agent(client)
+    await _import_agent(target_agent_id, await _export_agent(source_agent_id, client), client)
+    resp = await _find_agent_prompts(target_agent_id, client)
+    expected_prompts = [
+        AgentPromptPublic(
+            id=last_prompt_id + len(prompts) + 1 + i, name=p.name, content=p.content, shared=p.shared,
+            last_update=CURRENT_TIME, user_id=USER_ID, can_edit=True, starter=p.starter, collapsed=p.collapsed)
+        for i, p in enumerate(prompts)]
+    expected_prompts.sort(key=lambda x: x.name or "")
+    assert_response(resp, expected_prompts)
+
+
+@freeze_time(CURRENT_TIME)
+async def test_import_old_prompt_export_without_collapsed_stays_expanded(last_prompt_id: int, client: AsyncClient):
+    agent_id = await _create_agent(client)
+    markdown = (await _read_markdown("minimal_agent")) + """
+## Prompts
+
+<details>
+<summary>Legacy</summary>
+
+> Visibility: Private
+
+````
+Legacy text
+````
+
+</details>
+"""
+    await _import_agent(agent_id, _zip_file("agent.md", markdown), client)
+    resp = await _find_agent_prompts(agent_id, client)
+    assert_response(resp, [AgentPromptPublic(
+        id=last_prompt_id + 1, name="Legacy", content="Legacy text", shared=False, collapsed=False,
+        last_update=CURRENT_TIME, user_id=USER_ID, can_edit=True, starter=False)])
 
 
 @freeze_time(CURRENT_TIME)
@@ -106,6 +153,7 @@ async def fixture_last_file_id(session: AsyncSession) -> int:
 
 @freeze_time(CURRENT_TIME)
 @pytest.mark.usefixtures("stub_docs_tool_generate_description")
+@docs_ingestion_timeout
 async def test_import_exported_agent_with_all_tools_and_configs(
     users: List[UserListItem], last_prompt_id: int, last_file_id: int, last_thread_id: int, last_message_id: int, client: AsyncClient):
     agent_update = AgentUpdate(name="Test Agent 1", description="Test description", system_prompt="Test system prompt",
@@ -127,7 +175,7 @@ async def test_import_exported_agent_with_all_tools_and_configs(
     zip_file_content = await _export_agent(source_agent_id, client)
     target_agent_id = await _create_agent(client)
     result = await _import_agent(target_agent_id, zip_file_content, client)
-    assert result == {"unavailableTools": [], "toolsRequiringAuthentication": [], "unavailableModel": None, "defaultModel": None}
+    assert result == {"unavailableTools": [], "unavailableSubagents": [], "toolsRequiringAuthentication": [], "unavailableModel": None, "defaultModel": None}
     await _assert_imported_agent(target_agent_id, agent_update, prompts, advanced_file_processing, file_name, file_content, test_messages,
         last_prompt_id + len(prompts), last_file_id + 1, last_thread_id + 1, last_message_id + len(test_messages), test_case_name, users, client)
 
@@ -191,7 +239,8 @@ async def _assert_imported_agent(agent_id: int, agent_update: AgentUpdate, promp
     expected_prompts = [
         AgentPromptPublic(
             id=last_prompt_id + 1 + i, name=p.name, content=p.content, shared=p.shared,
-            last_update=CURRENT_TIME, user_id=USER_ID, can_edit=True, starter=p.starter)
+            last_update=CURRENT_TIME, user_id=USER_ID, can_edit=True, starter=p.starter,
+            collapsed=p.collapsed)
         for i, p in enumerate(prompts)]
     expected_prompts.sort(key=lambda x: x.name or "")
     assert_response(agent_prompts, expected_prompts)
@@ -266,9 +315,13 @@ async def test_import_non_editable_agent(client: AsyncClient):
 
 
 async def _zip_markdown(markdown_filename: str) -> bytes:
+    return _zip_file("agent.md", await _read_markdown(markdown_filename))
+
+
+async def _read_markdown(markdown_filename: str) -> str:
     markdown_path = solve_asset_path(f"agent_distribution/{markdown_filename}.md", __file__)
     async with aiofiles.open(markdown_path) as markdown:
-        return _zip_file("agent.md", await markdown.read())
+        return await markdown.read()
 
 
 def _zip_file(filename: str, content: bytes | str) -> bytes:
@@ -294,6 +347,33 @@ async def test_import_with_invalid_markdown(client: AsyncClient):
     resp = await _try_import_agent(AGENT_ID, await _zip_markdown("invalid_agent"), client)
     assert resp.status_code == status.HTTP_400_BAD_REQUEST
     assert resp.json()["detail"] == "missingRequiredConfiguration"
+
+
+async def test_import_exported_agent_preserves_visible_subagent(client: AsyncClient):
+    source_agent_id = await _create_agent(client)
+    await _update_agent(source_agent_id, AgentUpdate(agent_type=AgentType.DEEP_AGENT), client)
+    await configure_agent_tool(source_agent_id, f"{SUBAGENT_TOOL_ID}-*", {"agentId": 2}, client)
+    target_agent_id = await _create_agent(client)
+    result = await _import_agent(target_agent_id, await _export_agent(source_agent_id, client), client)
+    assert result["unavailableSubagents"] == []
+    resp = await _find_agent_tools(target_agent_id, client)
+    resp.raise_for_status()
+    assert {(c["toolId"], c["config"]["agentId"]) for c in resp.json()} == {(f"{SUBAGENT_TOOL_ID}-2", 2)}
+
+
+async def test_import_skips_subagent_not_visible_to_user(client: AsyncClient, override_user):
+    override_user(OTHER_USER_ID)
+    source_agent_id = await _create_agent(client)
+    await _update_agent(source_agent_id, AgentUpdate(agent_type=AgentType.DEEP_AGENT), client)
+    await configure_agent_tool(source_agent_id, f"{SUBAGENT_TOOL_ID}-*", {"agentId": NON_VISIBLE_AGENT_ID}, client)
+    zip_file_content = await _export_agent(source_agent_id, client)
+    override_user(USER_ID)
+    target_agent_id = await _create_agent(client)
+    result = await _import_agent(target_agent_id, zip_file_content, client)
+    assert result["unavailableSubagents"] == [f"{SUBAGENT_TOOL_ID}-{NON_VISIBLE_AGENT_ID}"]
+    resp = await _find_agent_tools(target_agent_id, client)
+    resp.raise_for_status()
+    assert resp.json() == []
 
 
 async def test_import_with_unavailable_tool(client: AsyncClient):

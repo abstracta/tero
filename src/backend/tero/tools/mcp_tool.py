@@ -6,8 +6,10 @@ from enum import Enum
 import logging
 from typing import Any, Mapping, Optional, cast
 
+import httpx
 from httpx import HTTPStatusError
 from langchain.tools import BaseTool
+from langchain_core.tools import ToolException
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 from mcp import ClientSession
@@ -29,7 +31,26 @@ from ..tools.auth import (
     ToolOAuthCallback,
     ToolOAuthClientInfoRepository,
 )
-from .core import AgentTool, StatusUpdateCallbackHandler
+from .core import AgentTool, StatusUpdateCallbackHandler, UserFacingToolError
+
+
+def wrap_mcp_tool_errors(tools: list[BaseTool]) -> list[BaseTool]:
+    for tool in tools:
+        coro = getattr(tool, "coroutine", None)
+        if coro is not None:
+            tool.coroutine = _as_user_facing(coro)
+        else:
+            tool._arun = _as_user_facing(tool._arun)
+    return tools
+
+
+def _as_user_facing(call):
+    async def wrapped(*args: Any, **kwargs: Any):
+        try:
+            return await call(*args, **kwargs)
+        except (ToolException, httpx.HTTPError) as e:
+            raise UserFacingToolError(str(e)) from e
+    return wrapped
 
 
 class AuthType(str, Enum):
@@ -115,7 +136,7 @@ class BaseMcpTool(AgentTool, abc.ABC):
         try:
             async with MultiServerMCPClient(connections).session(connection_id) as mcp_session:
                 tools = await self._build_tools(mcp_session)
-                self._tools = self._fix_tools_schemas(tools)
+                self._tools = wrap_mcp_tool_errors(self._fix_tools_schemas(tools))
                 for tool in self._tools:
                     tool.callbacks = [StatusUpdateCallbackHandler(tool.name, description=tool.description)]
                 yield self

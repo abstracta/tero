@@ -111,7 +111,7 @@ const processOAuthCallback = async (
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
   const error = url.searchParams.get("error");
-  const toolId = url.pathname.match(/\/tools\/([^\/]+)\/oauth-callback/)?.[1];
+  const toolId = oauthRequest.toolId;
 
   if (state !== oauthRequest.state) {
     throw new AuthenticationError("authenticationStateMismatch");

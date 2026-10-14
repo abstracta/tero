@@ -16,6 +16,7 @@ const { isSidebarCollapsed } = useSidebar();
 
 const props = defineProps<{
   chat: Thread,
+  nested?: boolean,
 }>();
 
 const showConfirmation = ref(false);
@@ -26,6 +27,7 @@ const lastMessageUpdate = computed(() => {
   moment.locale(locale.value);
   return moment.utc(props.chat.lastMessage ? props.chat.lastMessage : props.chat.creation).local().format('DD MMM YYYY, HH:mm A');
 });
+const agentName = computed(() => props.chat.agent.name || t('unavailableAgent'));
 
 const handleDeleteChat = () => {
   showConfirmation.value = true;
@@ -36,7 +38,7 @@ const handleUpdateChatName = () => {
 
 const onDeleteChat = async () => {
   try {
-    await deleteChat(props.chat.id);
+    await deleteChat(props.chat);
   } catch (e) {
     handleError(e);
   }
@@ -59,9 +61,14 @@ const onUpdateChatName = async (name: string) => {
     v-if="!showConfirmation && !showEditName"
     :is-collapsed="isSidebarCollapsed"
     @click="openChat(chat.id)"
-    v-tooltip.bottom="{value: `@${chat.agent.name}` + '\n' + lastMessageUpdate, showDelay: 1000}"
+    v-tooltip.bottom="{value: `@${agentName}` + '\n' + lastMessageUpdate, showDelay: 1000}"
     @menu-toggle="(event: Event) => menu?.toggle(event)">
-    <p class="line-clamp-1 break-all" :class="{ 'hidden': isSidebarCollapsed }">
+    <p
+      class="line-clamp-1 break-all"
+      :class="[
+        { hidden: isSidebarCollapsed },
+        props.nested ? 'text-content opacity-80 text-sm font-normal' : ''
+      ]">
       {{ chat.name }}
     </p>
     <template #actions>
@@ -101,12 +108,14 @@ const onUpdateChatName = async (name: string) => {
     "en": {
       "deleteChatTooltip": "Delete chat",
       "deleteChatConfirmation": "Delete chat?",
-      "editChatNameTooltip": "Rename chat"
+      "editChatNameTooltip": "Rename chat",
+      "unavailableAgent": "Unavailable agent"
     },
     "es": {
       "deleteChatTooltip": "Eliminar chat",
       "deleteChatConfirmation": "¿Eliminar chat?",
-      "editChatNameTooltip": "Renombrar chat"
+      "editChatNameTooltip": "Renombrar chat",
+      "unavailableAgent": "Agente no disponible"
     }
   }
 </i18n>

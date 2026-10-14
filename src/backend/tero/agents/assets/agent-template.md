@@ -38,6 +38,10 @@ By {{ author }}
 <details>
 <summary>{{ prompt.name }}</summary>
 
+{% if prompt.collapsed %}
+> Collapsed: {{ prompt.collapsed }}
+
+{% endif %}
 ````
 {{ prompt.content }}
 ````
@@ -54,6 +58,10 @@ By {{ author }}
 
 > Visibility: {{ prompt.visibility }}
 
+{% if prompt.collapsed %}
+> Collapsed: {{ prompt.collapsed }}
+
+{% endif %}
 ````
 {{ prompt.content }}
 ````

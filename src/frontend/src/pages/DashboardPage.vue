@@ -2,7 +2,7 @@
 import { useI18n } from 'vue-i18n'
 import { onMounted, ref, watch, computed } from 'vue'
 import { IconSparkles, IconUsers, IconSettings, IconMessages } from '@tabler/icons-vue'
-import { Role, Team, MY_TEAM_ID, GLOBAL_TEAM_ID, TeamRoleStatus, UserProfile } from '@/services/api'
+import { Team, MY_TEAM_ID, GLOBAL_TEAM_ID, TeamRoleStatus, UserProfile, OWNER_ROLES } from '@/services/api'
 import { loadUserProfile } from '@/composables/useUserProfile'
 import { useErrorHandler } from '@/composables/useErrorHandler'
 import { useSelectedTeam } from '@/composables/useSelectedTeam'
@@ -43,12 +43,12 @@ watch(
 const loadTeams = async () => {
   userProfile.value = await loadUserProfile()
   try {
-    const userTeams = (userProfile.value?.teams ?? []).filter((t) => t.role === Role.TEAM_OWNER && t.status === TeamRoleStatus.ACCEPTED).map((t) => new Team(t.id, t.name))
+    const userTeams = (userProfile.value?.teams ?? []).filter((t) => OWNER_ROLES.includes(t.role) && t.status === TeamRoleStatus.ACCEPTED).map((t) => new Team(t.id, t.name))
     const globalTeam = userTeams.find((t) => t.id === GLOBAL_TEAM_ID)
     const otherTeams = userTeams.filter((t) => t.id !== GLOBAL_TEAM_ID).sort((a, b) => a.name.localeCompare(b.name))
 
     teams.value = [...(activeTab.value === IMPACT_TAB || activeTab.value === USAGE_TAB ? [new Team(MY_TEAM_ID, t('me'))] : []), ...(globalTeam ? [globalTeam] : []), ...otherTeams]
-    globalTeamOwner.value = userProfile.value?.teams.some((team) => team.id === GLOBAL_TEAM_ID && team.role === Role.TEAM_OWNER)
+    globalTeamOwner.value = !!globalTeam
   } catch (error) {
     handleError(error)
   }
@@ -64,7 +64,7 @@ const tabs = computed(() => {
     { label: t('usageLabel'), value: USAGE_TAB, icon: IconMessages, component: DashboardUsage }
   ]
   
-  if (userProfile.value?.teams.some((t) => t.role === Role.TEAM_OWNER)) {
+  if (userProfile.value?.teams.some((t) => OWNER_ROLES.includes(t.role) && t.status === TeamRoleStatus.ACCEPTED)) {
     baseTabs.push({ label: t('usersLabel'), value: USERS_TAB, icon: IconUsers, component: DashboardUsers })
   }
   

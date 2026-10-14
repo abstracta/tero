@@ -1,15 +1,6 @@
 <script lang="ts">
 import { v4 as uuidv4 } from 'uuid';
-
-export interface StatusUpdate {
-  action: string
-  toolName?: string
-  description?: string
-  args?: any
-  step?: string
-  result?: string | string[]
-  timestamp: Date
-}
+import type { StatusUpdate } from '@tero/common/components/chat/ChatMessage.vue'
 
 export class AgentTestcaseChatUiMessage{
     id?: number
@@ -49,6 +40,8 @@ import { IconEditCircle, IconTrash } from '@tabler/icons-vue';
 import { escapeHtml } from 'markdown-it/lib/common/utils'
 import { useI18n } from 'vue-i18n'
 import { renderMarkDown } from '../../../../common/src/utils/formatter'
+import { buildAgentResponseCopyHtml } from '../../../../common/src/utils/chatExport'
+import CopyButton from '@tero/common/components/common/CopyButton.vue'
 
 const props = defineProps<{
     message: AgentTestcaseChatUiMessage
@@ -66,6 +59,8 @@ const { t } = useI18n()
 
 const messageElement = ref<HTMLElement | null>(null)
 
+const canCopy = computed(() => !props.message.isUser && !props.message.isPlaceholder && !!props.message.text)
+
 const renderedMessage = computed(() => {
     if (props.message.isPlaceholder) return props.message.text ? escapeHtml(props.message.text).replace(/\n/g, '<br/>') : ''
     return renderMarkDown(props.message.text, !props.message.isStreaming, t, messageElement)
@@ -74,6 +69,8 @@ const renderedMessage = computed(() => {
 const handleDeleteMessage = () => {
     emit('delete', props.message)
 }
+
+const getCopyHtml = () => buildAgentResponseCopyHtml(props.message.text, messageElement.value)
 
 </script>
 
@@ -101,11 +98,19 @@ const handleDeleteMessage = () => {
                     class="flex flex-col w-full leading-tight gap-2 overflow-x-auto text-content"
                     v-html="renderedMessage"></div>
             </div>
-            <div class="flex gap-2" :class="!actionsEnabled ? 'invisible' : ''">
-                <SimpleIcon interactive v-tooltip.bottom="t('editMessageButton')" @click="$emit('select', message)"
-                    :icon="IconEditCircle" />
-                <SimpleIcon interactive v-tooltip.bottom="t('deleteMessageButton')" @click="handleDeleteMessage"
-                    :icon="IconTrash" class="hover:text-error-alt" />
+            <div v-if="canCopy || actionsEnabled" class="flex gap-2" :class="message.isUser ? '' : 'justify-end'">
+                <CopyButton
+                    v-if="canCopy"
+                    :text="message.text"
+                    :html="getCopyHtml"
+                    v-tooltip.bottom="t('copyResponseButton')"
+                />
+                <template v-if="actionsEnabled">
+                    <SimpleIcon interactive v-tooltip.bottom="t('editMessageButton')" @click.stop="$emit('select', message)"
+                        :icon="IconEditCircle" />
+                    <SimpleIcon interactive v-tooltip.bottom="t('deleteMessageButton')" @click.stop="handleDeleteMessage"
+                        :icon="IconTrash" class="hover:text-error-alt" />
+                </template>
             </div>
         </div>
     </div>
@@ -128,6 +133,7 @@ const handleDeleteMessage = () => {
     "en": {
         "editMessageButton": "Edit message",
         "deleteMessageButton": "Delete message",
+        "copyResponseButton": "Copy response",
         "copyCodeButton": "Copy",
         "copiedMessage": "Copied!",
         "downloadCodeButton": "Download"
@@ -135,6 +141,7 @@ const handleDeleteMessage = () => {
     "es": {
         "editMessageButton": "Editar mensaje",
         "deleteMessageButton": "Eliminar mensaje",
+        "copyResponseButton": "Copiar respuesta",
         "copyCodeButton": "Copiar",
         "copiedMessage": "Copiado!",
         "downloadCodeButton": "Descargar"

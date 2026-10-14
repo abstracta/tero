@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import status
 from freezegun import freeze_time
@@ -6,11 +6,15 @@ from sqlmodel import col
 
 from .common import *
 
+from tero.agents.api import AGENT_PATH
+from tero.agents.domain import AgentUpdate
 from tero.agents.prompts.api import AGENT_PROMPTS_PATH, AGENT_PROMPT_PATH
 from tero.agents.prompts.domain import AgentPromptPublic, AgentPrompt
 
 
 NON_VISIBLE_AGENT_PROMPT_ID = 3
+SHARED_AGENT_ID = 2
+INACCESSIBLE_TEAM_ID = 4
 
 
 @pytest.fixture(name="prompts")
@@ -38,9 +42,66 @@ async def test_find_agent_prompts(client: AsyncClient, prompts: List[AgentPrompt
     assert_response(resp, [prompts[0], prompts[1]])
 
 
-async def test_find_non_visible_agent(client: AsyncClient):
-    resp = await _find_agents_prompts(NON_VISIBLE_AGENT_ID, client)
+@pytest.mark.parametrize("agent_id", [NON_VISIBLE_AGENT_ID, 99999])
+async def test_find_prompts_without_readable_content_returns_empty_list(client: AsyncClient, agent_id: int):
+    assert_response(await _find_agents_prompts(agent_id, client), [])
+
+
+@pytest.mark.parametrize("team_id", [None, INACCESSIBLE_TEAM_ID], ids=["private", "other-team"])
+async def test_inaccessible_agent_without_private_prompts_returns_empty_list(client: AsyncClient, override_user: Callable[[int], None], team_id: Optional[int]):
+    for shared in [False, True]:
+        resp = await add_agent_prompt(SHARED_AGENT_ID, client, name="Owner prompt", content="Owner content", shared=shared)
+        resp.raise_for_status()
+    resp = await client.put(AGENT_PATH.format(agent_id=SHARED_AGENT_ID), json=AgentUpdate(team_id=team_id).model_dump(mode="json", by_alias=True))
+    resp.raise_for_status()
+
+    override_user(OTHER_USER_ID)
+    assert_response(await _find_agents_prompts(SHARED_AGENT_ID, client), [])
+
+
+@pytest.mark.parametrize("team_id", [None, INACCESSIBLE_TEAM_ID], ids=["private", "other-team"])
+async def test_inaccessible_agent_only_returns_private_prompts(client: AsyncClient, override_user: Callable[[int], None], team_id: Optional[int]):
+    for shared in [False, True]:
+        resp = await add_agent_prompt(SHARED_AGENT_ID, client, name="Owner prompt", content="Owner content", shared=shared)
+        resp.raise_for_status()
+
+    override_user(OTHER_USER_ID)
+    resp = await add_agent_prompt(SHARED_AGENT_ID, client, name="Private prompt", content="Private content", shared=False)
+    resp.raise_for_status()
+    private_prompt = AgentPromptPublic.model_validate(resp.json())
+
+    override_user(USER_ID)
+    resp = await client.put(AGENT_PATH.format(agent_id=SHARED_AGENT_ID), json=AgentUpdate(team_id=team_id).model_dump(mode="json", by_alias=True))
+    resp.raise_for_status()
+
+    override_user(OTHER_USER_ID)
+    private_prompt.can_edit = False
+    assert_response(await _find_agents_prompts(SHARED_AGENT_ID, client), [private_prompt])
+
+
+@pytest.mark.parametrize("team_id", [None, INACCESSIBLE_TEAM_ID], ids=["private", "other-team"])
+@pytest.mark.parametrize("method, path, payload", [
+    ("POST", AGENT_PROMPTS_PATH, {"name": "New prompt", "content": "New content"}),
+    ("PUT", AGENT_PROMPT_PATH, {"name": "Changed prompt", "content": "Changed content"}),
+    ("DELETE", AGENT_PROMPT_PATH, None),
+], ids=["create", "update", "delete"])
+async def test_inaccessible_agent_rejects_prompt_writes(
+        client: AsyncClient, override_user: Callable[[int], None], team_id: Optional[int],
+        method: str, path: str, payload: Optional[dict[str, str]]):
+    override_user(OTHER_USER_ID)
+    resp = await add_agent_prompt(SHARED_AGENT_ID, client, name="Private prompt", content="Private content", shared=False)
+    resp.raise_for_status()
+    private_prompt = AgentPromptPublic.model_validate(resp.json())
+
+    override_user(USER_ID)
+    resp = await client.put(AGENT_PATH.format(agent_id=SHARED_AGENT_ID), json=AgentUpdate(team_id=team_id).model_dump(mode="json", by_alias=True))
+    resp.raise_for_status()
+
+    override_user(OTHER_USER_ID)
+    resp = await client.request(method, path.format(agent_id=SHARED_AGENT_ID, prompt_id=private_prompt.id), json=payload)
     assert resp.status_code == status.HTTP_404_NOT_FOUND
+    private_prompt.can_edit = False
+    assert_response(await _find_agents_prompts(SHARED_AGENT_ID, client), [private_prompt])
 
 
 async def _find_agents_prompts(agent_id: int, client: AsyncClient) -> Response:

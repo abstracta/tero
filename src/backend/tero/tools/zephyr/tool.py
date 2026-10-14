@@ -1,5 +1,5 @@
 from http import HTTPMethod
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from langchain_core.callbacks import Callbacks
 from langchain_core.tools import ArgsSchema, BaseTool
@@ -36,6 +36,7 @@ class ZephyrTool(TokenOpenApiTool):
     async def build_langchain_tools(self) -> list[BaseTool]:
         tools = await super().build_langchain_tools()
         tools.append(ZephyrSearchTestCasesTool(zephyr=self))
+        tools.append(ZephyrFindFolderByNameTool(zephyr=self))
         tools.append(ZephyrCloneTestCaseTool(zephyr=self))
         return tools
 
@@ -145,6 +146,64 @@ class ZephyrSearchTestCasesTool(BaseTool):
             for status in statuses
             if (status.get("name") or "").casefold() in {name.casefold() for name in status_names}
         }
+
+
+class FindFolderByNameArgs(BaseModel):
+    projectKey: str = Field(description="Jira project key filter")
+    path: str = Field(
+        description='Folder name or path (e.g. "Regression/Login tests"). Case-insensitive exact match.'
+    )
+    folderType: Literal["TEST_CASE", "TEST_PLAN", "TEST_CYCLE"] = Field(
+        description='Folder type filter. Either "TEST_CASE", "TEST_PLAN", or "TEST_CYCLE".'
+    )
+
+
+class ZephyrFindFolderByNameTool(BaseTool):
+    name: str = "Zephyr-findFolderByName"
+    description: str = (
+        "Zephyr tool that finds folders by name or path within a project. "
+        "Returns matching folder ids, full path, and metadata."
+    )
+    args_schema: Optional[ArgsSchema] = FindFolderByNameArgs
+    callbacks: Callbacks = [StatusUpdateCallbackHandler(name, description=description)]
+    zephyr: ZephyrTool
+
+    def _run(self, *args: Any, **kwargs: Any) -> Any:
+        raise NotImplementedError("Synchronous run not implemented.")
+
+    async def _arun(self, **kwargs: Any) -> dict[str, Any]:
+        args = FindFolderByNameArgs.model_validate(kwargs)
+        folders = await self.zephyr._fetch_paged_values(
+            f"{self.zephyr._api_url}/folders",
+            {"projectKey": args.projectKey, "folderType": args.folderType},
+        )
+        by_id = {folder["id"]: folder for folder in folders}
+        paths = {folder["id"]: self._folder_path_segments(folder, by_id) for folder in folders}
+        matched = [
+            {**folder, "path": "/".join(paths[folder["id"]])}
+            for folder in folders
+            if self._matches_folder_path(args.path, paths[folder["id"]])
+        ]
+        return {"total": len(matched), "values": matched}
+
+    
+    def _folder_path_segments(self, folder: dict, by_id: dict[int, dict]) -> list[str]:
+        segments = []
+        current = folder
+        while current:
+            segments.append(current.get("name") or "")
+            parent_id = current.get("parentId")
+            current = by_id.get(parent_id) if parent_id else None
+        return segments[::-1]
+
+
+    def _matches_folder_path(self, query: str, path: list[str]) -> bool:
+        segments = [segment.strip() for segment in query.split("/") if segment.strip()]
+        if not segments or len(path) < len(segments):
+            return False
+        return [segment.casefold() for segment in segments] == [
+            segment.casefold() for segment in path[-len(segments):]
+        ]
 
 
 class CloneTestCaseArgs(BaseModel):

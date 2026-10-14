@@ -17,18 +17,23 @@ from ..files.api import build_file_download_response
 from ..files.core import QuotaExceededError, add_encoding_to_content_type
 from ..files.domain import File, FileStatus, FileUpdate, FileMetadata, FileMetadataWithContent
 from ..files.repos import FileRepository
-from ..teams.domain import GLOBAL_TEAM_ID, Role
+from ..threads.domain import ModelRateLimitError
+from ..threads.repos import ThreadRepository
+from ..teams.domain import GLOBAL_TEAM_ID
 from ..tools.auth import ToolAuthRequestException, build_tool_auth_request_http_exception
+from ..tools.api import require_owner_for_owner_configured_tool
 from ..tools.core import AgentTool
 from ..tools.repos import ToolRepository
+from ..tools.subagent import SubagentTool
 from ..users.domain import User
 from ..users.repos import UserRepository
 from . import field_generation, distribution
 from .distribution import AgentImportResult, UnsupportedFileStructureError, MissingRequiredConfigurationError
-from .domain import AgentListItem, Agent, AgentUpdate, AgentToolConfig, AutomaticAgentField, PublicAgent
+from .domain import AgentListItem, Agent, AgentUpdate, AgentToolConfig, AutomaticAgentField, PublicAgent, AgentType
 from .evaluators.repos import EvaluatorRepository
 from .prompts.repos import AgentPromptRepository
 from .repos import AgentRepository, AgentToolConfigRepository, AgentToolConfigFileRepository
+from .snapshots.repos import AgentSnapshotRepository
 from .test_cases.clone import clone_test_case
 from .test_cases.repos import TestCaseRepository
 from .tool_file import upload_tool_file
@@ -54,21 +59,26 @@ class AgentSort(Enum):
 async def find_agents(
         user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)],
         own: bool = False, pinned: bool = False, text: Optional[str] = None, sort: AgentSort = AgentSort.LAST_UPDATE,
-        limit: int = 8, offset: int = 0, team_id: Optional[int] = None) -> List[AgentListItem]:
+        limit: Optional[int] = None, offset: int = 0, team_id: Optional[int] = None,
+        thread_limit: Optional[int] = None) -> List[AgentListItem]:
     agents_repo = AgentRepository(db)
+    paged_limit = limit if limit is not None else 8
     if(team_id and not user.is_member_of(team_id)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     if own:
-        return await agents_repo.find_own_agents(user, limit, offset)
+        return await agents_repo.find_own_agents(user, paged_limit, offset)
     if pinned:
-        return await agents_repo.find_user_agents(text, user)
+        agents = await agents_repo.find_user_agents(text, user, limit, offset)
+        if thread_limit is None:
+            return agents
+        return await ThreadRepository(db).find_latest_by_agents(agents, user.id, thread_limit)
     if text:
-        return await agents_repo.find_by_text(text, user, limit, offset)
+        return await agents_repo.find_by_text(text, user, paged_limit, offset)
     if sort == AgentSort.ACTIVE_USERS:
-        ret = await agents_repo.find_top_used(user, limit, offset, team_id)
+        ret = await agents_repo.find_top_used(user, paged_limit, offset, team_id)
         return ret
     else:
-        return await agents_repo.find_newest(user, limit, offset, team_id)
+        return await agents_repo.find_newest(user, paged_limit, offset, team_id)
 
 
 @router.get(f"{AGENTS_PATH}/default")
@@ -136,17 +146,56 @@ async def update_agent(agent_id: int, updated: AgentUpdate, user: Annotated[User
             detail="Global owner access required to manage protected configuration"
         )
 
-    if updated.team_id == GLOBAL_TEAM_ID and env.disable_publish_global and not any(tr.role in [Role.TEAM_OWNER, Role.TEAM_EDITOR] and tr.team_id == GLOBAL_TEAM_ID for tr in user.team_roles):
+    if updated.team_id == GLOBAL_TEAM_ID and env.disable_publish_global and not user.is_editor_of(GLOBAL_TEAM_ID):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Global team members cannot publish to global team"
         )
 
+    converting_to_react = (
+        updated.agent_type == AgentType.REACT_AGENT and agent.agent_type == AgentType.DEEP_AGENT
+    )
+    if updated.team_id is not None and updated.team_id != agent.team_id and not converting_to_react:
+        unshared_subagents = await _find_unshared_subagents(agent, updated.team_id, db)
+        if unshared_subagents:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot share agent because these subagents are not shared with the same team: {", ".join(unshared_subagents)}",
+            )
+
+    if converting_to_react:
+        await _remove_subagent_tool_configs(agent.id, db)
+    if updated.team_id != agent.team_id:
+        await AgentSnapshotRepository(db).save_previous_team_snapshot(agent, updated.team_id)
     agent.update_with(updated)
     ret = await AgentRepository(db).update(agent)
     if updated.publish_prompts:
         await AgentPromptRepository(db).publish_all_private_prompts(agent_id)
     return PublicAgent.from_agent(ret, ret.user_id == user.id)
+
+
+async def _find_subagent_tool_configs(agent_id: int, db: AsyncSession) -> List[tuple[AgentToolConfig, int]]:
+    found = []
+    for config in await AgentToolConfigRepository(db).find_by_agent_id(agent_id):
+        subagent_id = SubagentTool.parse_subagent_id(config.tool_id)
+        if subagent_id is not None:
+            found.append((config, subagent_id))
+    return found
+
+
+async def _find_unshared_subagents(agent: Agent, team_id: int, db: AsyncSession) -> List[str]:
+    unshared_subagents = []
+    for _, subagent_id in await _find_subagent_tool_configs(agent.id, db):
+        subagent = cast(Agent, await AgentRepository(db).find_by_id(subagent_id))
+        if subagent.team_id not in (team_id, GLOBAL_TEAM_ID):
+            unshared_subagents.append(cast(str, subagent.name))
+    return unshared_subagents
+
+
+async def _remove_subagent_tool_configs(agent_id: int, db: AsyncSession) -> None:
+    repo = AgentToolConfigRepository(db)
+    for config, _ in await _find_subagent_tool_configs(agent_id, db):
+        await repo.delete(agent_id, config.tool_id)
 
 
 async def find_editable_agent(agent_id: int, user: User, db: AsyncSession) -> Agent:
@@ -176,6 +225,7 @@ AGENT_TOOL_PATH = f"{AGENT_TOOLS_PATH}/{{tool_id}}"
 class PublicAgentTool(CamelCaseModel):
     tool_id: str
     config: dict
+    tool_metadata: Optional[dict] = None
 
 
 @router.post(AGENT_TOOLS_PATH)
@@ -185,12 +235,27 @@ async def configure_agent_tool(agent_id: int, tool_config: PublicAgentTool,
     tool = _find_agent_tool(tool_config.tool_id)
     if not tool:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid tool id")
+    require_owner_for_owner_configured_tool(agent.user_id, tool.id, user.id)
     tool.configure(agent, user.id, tool_config.config, db)
+    # when the tool id has a wildcard the definitive tool id is resolved by tool.configure, so another config
+    # of the same tool may already be using it and would be silently overwritten
+    if tool.id != tool_config.tool_id and await AgentToolConfigRepository(db).find_by_ids(agent_id, tool.id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Duplicate tool configuration")
     try:
-        prev_config = await AgentToolConfigRepository(db).find_by_ids(agent_id, tool.id, include_drafts=True)
+        # the previous config is stored with the requested tool id, which differs from the resolved one when
+        # the tool resolves its id from the config and the config changed it. the resolved id is only a
+        # fallback for the draft saved by a previous auth request
+        repo = AgentToolConfigRepository(db)
+        prev_config = await repo.find_by_ids(agent_id, tool_config.tool_id, include_drafts=True)
+        if not prev_config and tool.id != tool_config.tool_id:
+            prev_config = await repo.find_by_ids(agent_id, tool.id, include_drafts=True)
         await tool.setup(prev_config)
         await _save_tool_config(agent_id, tool, tool_config.tool_id, draft=False, db=db)
-        return tool_config
+        return PublicAgentTool(
+            tool_id=tool.id,
+            config=tool.config,
+            tool_metadata=tool.tool_metadata,
+        )
     except ToolAuthRequestException as e:
         # To be able to complete authentication we need to save the tool config
         await _save_tool_config(agent_id, tool, tool_config.tool_id, draft=True, db=db)
@@ -208,10 +273,22 @@ async def _save_tool_config(agent_id: int, tool: AgentTool, prev_tool_id: str, d
     repo = AgentToolConfigRepository(db)
     await repo.delete_drafts(agent_id)
     # this happens when tool id has a wildcard and the definitive tool id is defined when tool.configure is called
-    # we need to delete the old tool config since the tool id may have changed when tool.configure was invoked
+    # we need to remove the old tool config since the tool id may have changed when tool.configure was invoked
     if tool.id != prev_tool_id:
-        await repo.delete(agent_id, prev_tool_id)
-    await repo.add(AgentToolConfig(agent_id=agent_id, tool_id=tool.id, config=tool.config, draft=draft))
+        await _remove_prev_tool_config(agent_id, prev_tool_id, tool.user_id, db)
+    await repo.add(AgentToolConfig(agent_id=agent_id, tool_id=tool.id, config=tool.config, tool_metadata=tool.tool_metadata, draft=draft))
+
+
+# a change in the tool id (eg: the alias of a sql connection) is handled as removing the tool config and adding
+# it again, as it is done for the tools not supporting several configs per agent. so all the data associated to
+# the previous tool id, which is part of its key, is removed instead of being left orphaned
+async def _remove_prev_tool_config(agent_id: int, prev_tool_id: str, user_id: int, db: AsyncSession):
+    prev_config = await AgentToolConfigRepository(db).find_by_ids(agent_id, prev_tool_id)
+    prev_tool = _find_agent_tool(prev_tool_id)
+    if not prev_config or not prev_tool:
+        return
+    prev_tool.configure(prev_config.agent, user_id, prev_config.config, db)
+    await _remove_tool_config(prev_tool, agent_id, prev_tool_id, db)
 
 
 @router.get(AGENT_TOOLS_PATH)
@@ -222,10 +299,33 @@ async def find_agent_tools_configs(agent_id: int, user: Annotated[User, Depends(
     return await AgentToolConfigRepository(db).find_by_agent_id(agent_id)
 
 
+@router.post(f"{AGENT_TOOL_PATH}/sync")
+async def sync_agent_tool(agent_id: int, tool_id: str, user: Annotated[User, Depends(get_current_user)],
+        db: Annotated[AsyncSession, Depends(get_db)]) -> PublicAgentTool:
+    tool = await _find_editable_configured_agent_tool(agent_id, tool_id, user, db)
+    try:
+        result = await tool.sync()
+        if result is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tool does not support sync")
+        return PublicAgentTool(
+            tool_id=tool.id,
+            config=tool.config,
+            tool_metadata=tool.tool_metadata,
+        )
+    except ToolAuthRequestException as e:
+        raise build_tool_auth_request_http_exception(e.request)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
 @router.delete(AGENT_TOOL_PATH, status_code=status.HTTP_204_NO_CONTENT)
 async def delete_agent_tool(agent_id: int, tool_id: str, user: Annotated[User, Depends(get_current_user)],
         db: Annotated[AsyncSession, Depends(get_db)]):
     tool = await _find_editable_configured_agent_tool(agent_id, tool_id, user, db)
+    await _remove_tool_config(tool, agent_id, tool_id, db)
+
+
+async def _remove_tool_config(tool: AgentTool, agent_id: int, tool_id: str, db: AsyncSession):
     await tool.teardown()
     await AgentToolConfigFileRepository(db).delete_by_agent_id_and_tool_id(agent_id, tool_id)
     await AgentToolConfigRepository(db).delete(agent_id, tool_id)
@@ -236,6 +336,7 @@ async def _find_editable_configured_agent_tool(agent_id: int, tool_id: str, user
     ret = await _find_configured_agent_tool(agent_id, tool_id, user, db)
     if not ret.agent.is_editable_by(user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tool config not found")
+    require_owner_for_owner_configured_tool(ret.agent.user_id, ret.id, user.id)
     return ret
 
 
@@ -340,6 +441,9 @@ async def _update_tool_file(file_id: int, tool_id: str, agent_id: int, user_id: 
         except QuotaExceededError:
             file.status = FileStatus.QUOTA_EXCEEDED
             logger.warning(f"Quota exceeded for user {user_id} when updating tool file {file_id} {file.name}")
+        except ModelRateLimitError:
+            file.status = FileStatus.RATE_LIMITED
+            logger.warning(f"Rate limited by AI provider when updating tool file {file_id} {file.name}")
         except Exception as e:
             file.status = FileStatus.ERROR
             logger.error(f"Error updating tool file {file_id} {file.name} {e}", exc_info=True)

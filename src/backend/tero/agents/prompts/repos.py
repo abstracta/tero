@@ -29,11 +29,12 @@ class AgentPromptRepository:
         ret = await self._db.exec(stmt)
         return ret.one_or_none()
 
-    async def find_user_agent_prompts(self, user_id: int, agent_id: int) -> List[AgentPrompt]:
+    async def find_user_agent_prompts(self, user_id: int, agent_id: int, only_private: bool = False) -> List[AgentPrompt]:
         stmt = (
             select(AgentPrompt)
             .where(AgentPrompt.agent_id == agent_id,
-                   or_(AgentPrompt.user_id == user_id, AgentPrompt.shared == True))
+                   and_(AgentPrompt.user_id == user_id, AgentPrompt.shared == False) if only_private
+                   else or_(AgentPrompt.user_id == user_id, AgentPrompt.shared == True))
             .order_by(asc(AgentPrompt.name))
         )
         ret = await self._db.exec(stmt)

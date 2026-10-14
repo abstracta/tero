@@ -9,6 +9,7 @@ from sqlalchemy import pool
 
 # need to add following type ignore to avoid intellij removing imports when organizing them, and warnings in vscode
 from tero.agents.domain import *  # type: ignore
+from tero.agents.snapshots.domain import *  # type: ignore
 from tero.api_keys.domain import *  # type: ignore
 from tero.agents.evaluators.domain import *  # type: ignore
 from tero.agents.prompts.domain import *  # type: ignore

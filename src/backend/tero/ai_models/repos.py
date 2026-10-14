@@ -13,7 +13,7 @@ class AiModelRepository:
         self._db = db
 
     async def find_all(self) -> List[LlmModel]:
-        ret = await self._db.exec(select(LlmModel).order_by(col(LlmModel.prompt_1k_token_usd)))
+        ret = await self._db.exec(select(LlmModel).order_by(col(LlmModel.completion_1k_token_usd), col(LlmModel.id)))
         return [model for model in ret.all() if has_valid_provider(model.id)]
 
     async def find_by_id(self, model_id: str) -> Optional[LlmModel]:

@@ -1,11 +1,9 @@
 import copy
-import os
 
 import aiofiles
 import aiofiles.os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-import logging
 import re
 from typing import List, Optional, Any, cast, Annotated
 
@@ -23,9 +21,9 @@ from ...core.env import env
 from ...files.domain import File, FileStatus, FileMetadata
 from ...files.repos import FileRepository
 from ..core import AgentTool, AgentToolConfig, load_schema, StatusUpdateCallbackHandler
+from ..mcp_tool import wrap_mcp_tool_errors
 
 
-logger = logging.getLogger(__name__)
 BROWSER_TOOL_ID = "browser"
 
 
@@ -70,22 +68,14 @@ class ScreenshotPersistingTool(BaseTool):
 
         clean_kwargs = {k: v for k, v in kwargs.items() if v is not None and k != "tool_call_id"}
         result = await self._mcp_tool._arun(*args, config=config, run_manager=run_manager, **clean_kwargs)
-        path = None
-        try:
-            path = self._extract_screenshot_path(result)
-            file = await self._save_screenshot_to_database(path)
-            return ToolMessage(
-                tool_call_id=tool_call_id,
-                name=self.name,
-                content=self._replace_file_path_references(result[0], path, file),
-                response_metadata={"file": file}
-            )
-        except Exception:
-            if path:
-                logger.info(f"Extracted screenshot path: {path}")
-            await self._log_playwright_output_files()
-            logger.error(f"Problem saving screenshot to database for result: {result[0]}", exc_info=True)
-            return "Error saving screenshot to database"
+        path = self._extract_screenshot_path(result)
+        file = await self._save_screenshot_to_database(path)
+        return ToolMessage(
+            tool_call_id=tool_call_id,
+            name=self.name,
+            content=self._replace_file_path_references(result[0], path, file),
+            response_metadata={"file": file}
+        )
 
     def _extract_screenshot_path(self, result: Any) -> str:
         # The MCP Playwright tool usually returns the full output path, but in
@@ -126,12 +116,6 @@ class ScreenshotPersistingTool(BaseTool):
             await aiofiles.os.remove(host_path)
             return FileMetadata.from_file(ret)
 
-    async def _log_playwright_output_files(self) -> None:
-        base = os.path.abspath(env.browser_tool_playwright_output_dir)
-        names = sorted(await aiofiles.os.listdir(base))
-        listing = "\n".join(names) if names else "(empty)"
-        logger.info(f"Playwright output directory: {base}\n{listing}")
-
     def _replace_file_path_references(self, content: str, path: str, file: FileMetadata) -> str:
         final_path = f"/chat/{self._thread_id}/files/{file.id}"
         final_absolute_url = f"{env.frontend_url}{final_path}"
@@ -159,7 +143,7 @@ class BrowserTool(AgentTool):
         server_name = "playwright"
         client = MultiServerMCPClient({server_name: {"transport": "streamable_http", "url": env.browser_tool_playwright_mcp_url }})
         async with client.session(server_name) as mcp_session:
-            self._tools = await load_mcp_tools(mcp_session)
+            self._tools = wrap_mcp_tool_errors(await load_mcp_tools(mcp_session))
             self._tools = [ScreenshotPersistingTool(cast(StructuredTool, t), self.user_id, self._thread_id, cast(AsyncSession, self._db)) if t.name == "browser_take_screenshot" else t for t in self._tools]
             for tool in self._tools:
                 tool.callbacks = [StatusUpdateCallbackHandler(tool.name, description=tool.description)]

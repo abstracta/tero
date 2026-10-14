@@ -103,17 +103,15 @@ const saveStarter = async (p: AgentPrompt) => {
       </div>
     </div>
   </div>
-  <Dialog :visible="editingStarter !== undefined" :modal="true" :draggable="false" :resizable="false" :closable="false" class="basic-dialog"
-    @update:visible="closePromptEditor">
-    <PromptEditor
-      :starter="true"
-      :editing-prompt="editingStarter"
-      :shared-agent="agent.team !== undefined"
-      :prompt-saver="saveStarter"
-      :error-handler="handleError"
-      @close="closePromptEditor"
-    />
-  </Dialog>
+  <PromptEditor
+    v-if="editingStarter"
+    :starter="true"
+    :editing-prompt="editingStarter"
+    :shared-agent="agent.team !== undefined"
+    :prompt-saver="saveStarter"
+    :error-handler="handleError"
+    @close="closePromptEditor"
+  />
 </template>
 
 <i18n>

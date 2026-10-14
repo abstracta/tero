@@ -6,35 +6,19 @@ CLI to authenticate with Tero, manage API keys, and send messages to agents.
 
 - `curl` — used by the install command and `install.sh` to download the CLI binary
 
-Create a [GitLab personal access token](https://docs.gitlab.com/user/profile/personal_access_tokens/) with access to this repository and these scopes:
-
-- `read_repository` — fetch `install.sh` from the repository
-- `read_api` — download CLI binaries from the GitLab package registry
-
-Export it as `GITLAB_TOKEN` before running the install command.
-
 ## Installation
 
-```bash
-GITLAB_TOKEN=glpat-xxx curl -fsSL -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://gitlab.abstracta.us/api/v4/projects/350/repository/files/src%2Fcli%2Finstall.sh/raw?ref=master" | bash
-```
-
-Set `TERO_VERSION` to install a specific release (e.g. `0.1.0`) or the latest master build (`dev`):
+Installs the latest release:
 
 ```bash
-GITLAB_TOKEN=glpat-xxx curl -fsSL -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://gitlab.abstracta.us/api/v4/projects/350/repository/files/src%2Fcli%2Finstall.sh/raw?ref=master" | TERO_VERSION=dev bash
+curl -fsSL https://raw.githubusercontent.com/abstracta/tero/main/src/cli/install.sh | bash
 ```
 
-### CI/CD Pipelines
-
-Add `GITLAB_TOKEN` as a secret/variable in your pipeline and run:
+### CI
 
 ```yaml
-script:
-  - curl -fsSL -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "https://gitlab.abstracta.us/api/v4/projects/350/repository/files/src%2Fcli%2Finstall.sh/raw?ref=master" | bash
-  - tero --version
+- run: curl -fsSL https://raw.githubusercontent.com/abstracta/tero/main/src/cli/install.sh | bash
+- run: tero --version
 ```
 
 ## Commands

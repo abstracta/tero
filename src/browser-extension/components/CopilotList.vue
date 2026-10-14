@@ -5,6 +5,7 @@ import { useToast } from 'vue-toastification'
 import { IconPlus, IconLoader } from '@tabler/icons-vue'
 import { findAllAgents, removeAgent, updateAgents, removeAgentsByHubUrl } from '~/utils/agent-repository'
 import { Agent, AgentType, AgentSource } from '~/utils/agent'
+import { AuthService } from '~/utils/auth'
 
 interface HubGroup {
   url: string
@@ -115,6 +116,13 @@ const cleanupAgents = async (agentsToCleanup: Agent[]) => {
   }
 }
 
+const clearHubAuth = async (hubAgents: Agent[]) => {
+  const auth = hubAgents[0]?.manifest.auth
+  if (auth) {
+    await new AuthService(auth).clearAuth()
+  }
+}
+
 const refreshHub = async (hubUrl: string) => {
   isLoading.value = true
   let existingAgents: Agent[] = []
@@ -149,9 +157,11 @@ const confirmHubRemoval = async () => {
     const hubAgents = existingAgents.filter(a => a.type === AgentType.TeroAgent && a.url === deletingHubUrl.value)
     await cleanupAgents(hubAgents)
     await removeAgentsByHubUrl(deletingHubUrl.value)
+    await clearHubAuth(hubAgents)
     agents.value = await findAllAgents()
     closeHubDeletionConfirmation()
   } catch (e: any) {
+    agents.value = await findAllAgents()
     toast.error(t('removeHubError'))
   }
 };

@@ -14,6 +14,7 @@ from tokenizers import Tokenizer
 
 from ..core.env import env
 from .domain import AiModelProvider
+from .openai_provider import openai_resilience_kwargs
 
 
 logger = logging.getLogger(__name__)
@@ -21,14 +22,15 @@ logger = logging.getLogger(__name__)
 
 class VllmAiProvider(AiModelProvider):
 
-    def _build_chat_model(self, model: str, temperature: Optional[float], reasoning_effort: Optional[str], streaming: bool) -> BaseChatModel:
+    def _build_chat_model(self, model: str, temperature: Optional[float], reasoning_effort: Optional[str], streaming: bool, request_timeout: Optional[float] = None, max_retries: Optional[int] = None) -> BaseChatModel:
         index, model_id = self._find_vllm_model(model)
         return VLLMChatModel(
             base_url=env.vllm_urls[index],
             api_key=env.vllm_api_keys[index],
             model=model_id,
             temperature=temperature,
-            streaming=streaming)
+            streaming=streaming,
+            **openai_resilience_kwargs(request_timeout, max_retries))
 
     def _find_vllm_model(self, model: str) -> tuple[int, str]:
         return next((index, item[1]) for index, item in enumerate(env.vllm_model_id_mapping.items()) if item[0] == model)
@@ -39,14 +41,15 @@ class VllmAiProvider(AiModelProvider):
     def is_rate_limit_error(self, exc: Exception) -> bool:
         return isinstance(exc, RateLimitError)
 
-    def build_embedding(self, model: str) -> Embeddings:
+    def build_embedding(self, model: str, request_timeout: Optional[float] = None, max_retries: Optional[int] = None) -> Embeddings:
         index, model_id = self._find_vllm_model(model)
         return OpenAIEmbeddings(
             base_url=env.vllm_urls[index],
             api_key=env.vllm_api_keys[index],
             model=model_id,
             embedding_ctx_length=env.embedding_context_limit,
-            tiktoken_enabled=False)
+            tiktoken_enabled=False,
+            **openai_resilience_kwargs(request_timeout, max_retries))
 
     def count_tokens(self, txt: str, model: str) -> int:
         _, model_id = self._find_vllm_model(model)
@@ -68,6 +71,8 @@ class VLLMChatModel(ChatOpenAI):
         self,
         messages: Sequence[BaseMessage],
         tools: Sequence[dict[str, Any] | type | Callable | BaseTool] | None = None,
+        *,
+        allow_fetching_images: bool = True,
     ) -> int:
         total = 0
         for msg in messages:

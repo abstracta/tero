@@ -12,11 +12,20 @@ from ..users.domain import User
 from .core import AgentTool
 from .auth import ToolAuthCallbackError, ToolOAuthCallback, ToolAuthTokenCallback, ToolAuthRepository, ToolOAuthState
 from .repos import ToolRepository
+from .notion import NOTION_TOOL_ID
 
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 TOOLS_PATH = f"{BASE_PATH}/tools"
+
+
+def require_owner_for_owner_configured_tool(agent_user_id: Optional[int], tool_id: str, user_id: int) -> None:
+    if tool_id in [NOTION_TOOL_ID] and agent_user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the agent owner can configure this tool",
+        )
 
 
 @router.get(TOOLS_PATH)
@@ -35,6 +44,7 @@ async def complete_tool_auth(tool_id: str, agent_id: int, callback: ToolOAuthCal
     if not config:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     tool = _find_tool(tool_id)
+    require_owner_for_owner_configured_tool(config.agent.user_id, tool.id, user.id)
     tool.configure(config.agent, user.id, config.config, db)
     try:
         await tool.auth(callback)

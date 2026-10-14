@@ -1,10 +1,12 @@
 @include: ./docs.md
 @include: ./web.md
 @include: ./browser.md
+@include: ./subagent.md
 @include: ./jira.md
 @include: ./azure-devops.md
 @include: ./zephyr.md
 @include: ./github.md
+@include: ./notion.md
 @include: ./youtrack.md
 @include: ./practitest.md
 @include: ./redmine.md

@@ -1,5 +1,6 @@
 import { ref, nextTick, type Ref } from 'vue'
 import MarkdownIt from 'markdown-it'
+import MarkdownItAttrs from 'markdown-it-attrs'
 import MarkdownItPlantuml from 'markdown-it-plantuml'
 import Token from 'markdown-it/lib/token'
 import hljs from 'highlight.js'
@@ -27,6 +28,18 @@ const onResize = () => {
 }
 
 const resizeObserver: ResizeObserver = new ResizeObserver(onResize)
+
+const BR_TAG = /^<br\s*\/?>/i
+
+const useBrTags = (md: MarkdownIt) => {
+  md.inline.ruler.before('html_inline', 'br_tag', (state, silent) => {
+    const match = state.src.slice(state.pos).match(BR_TAG)
+    if (!match) return false
+    if (!silent) state.push('hardbreak', 'br', 0)
+    state.pos += match[0].length
+    return true
+  })
+}
 
 const useTables = (md: MarkdownIt) => {
   const downloadButton = `
@@ -56,8 +69,17 @@ const useTables = (md: MarkdownIt) => {
     }
   })
 
-  md.renderer.rules.td_open = () => '<td class="break-words border px-4 py-2">'
-  md.renderer.rules.th_open = () => '<th class="break-words border px-4 py-2 bg-surface-muted !font-medium">'
+  const mergeCellStyle = (defaults: string, attrStyle?: string | null) =>
+    attrStyle ? `${defaults};${attrStyle}` : defaults
+
+  md.renderer.rules.td_open = (tokens, idx) => {
+    const style = mergeCellStyle('overflow-wrap:break-word', tokens[idx].attrGet('style'))
+    return `<td class="border px-4 py-2" style="${escapeHtml(style)}">`
+  }
+  md.renderer.rules.th_open = (tokens, idx) => {
+    const style = mergeCellStyle('white-space:nowrap', tokens[idx].attrGet('style'))
+    return `<th class="border px-4 py-2 bg-surface-muted !font-medium" style="${escapeHtml(style)}">`
+  }
   md.renderer.rules.table_close = () => '</table>'
   md.renderer.rules.tbody_open = () => '<tbody class="divide-y divide-border">'
 }
@@ -181,7 +203,9 @@ export const renderMarkDown = (text: string, isComplete: boolean, t?: (key: stri
   useTargetBlankLinks(md)
   useEcharts(md)
   useCodeInline(md)
+  useBrTags(md)
   if (isComplete) md.use(MarkdownItPlantuml)
+  md.use(MarkdownItAttrs, { allowedAttributes: ['style'] })
   md.use(useTables)
   md.use(listDecimalPlugin)
   md.use(listBulletPlugin)

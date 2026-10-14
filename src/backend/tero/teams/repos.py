@@ -20,7 +20,7 @@ class TeamRepository:
         result = await self._db.exec(query)
         return result.one_or_none()
 
-    async def find_team_users(self, team_id: int, limit: Optional[int] = None, offset: Optional[int] = None, search: Optional[str] = None) -> List[TeamUser]:
+    async def find_team_users(self, team_id: int, current_user: User, limit: Optional[int] = None, offset: Optional[int] = None, search: Optional[str] = None) -> List[TeamUser]:
         query = (select(User, TeamRole.role, TeamRole.status))
 
         if team_id == GLOBAL_TEAM_ID:
@@ -34,15 +34,18 @@ class TeamRepository:
 
         result = await self._db.exec(query)
         rows = result.all()
+        include_monthly_usd_limit = current_user.is_budget_owner()
 
         return [
             TeamUser(
                 id=user.id,
-                name=user.name, 
-                username=user.username, 
+                name=user.name,
+                username=user.username,
                 role=Role(role) if role else Role.TEAM_MEMBER,
                 role_status=TeamRoleStatus(status) if status else TeamRoleStatus.ACCEPTED,
                 verified=user.name is not None,
+                exclude_from_metrics=user.exclude_from_metrics,
+                monthly_usd_limit=user.monthly_usd_limit if include_monthly_usd_limit else None,
             )
             for user, role, status in rows
         ]

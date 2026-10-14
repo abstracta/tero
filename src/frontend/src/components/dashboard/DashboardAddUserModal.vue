@@ -13,6 +13,7 @@ const api = new ApiService();
 const props = defineProps<{
     showModal: boolean;
     teamId: number;
+    canAssignBudgetOwner?: boolean;
 }>();
 
 const emit = defineEmits(['update:showModal', 'usersAdded']);
@@ -143,6 +144,7 @@ watch(() => props.showModal, async () => {
           :users="users" 
           :teamUsers="teamUsers" 
           :loadingUsers="loadingUsers"
+          :can-assign-budget-owner="canAssignBudgetOwner"
           ref="usersFormRef"
         />
         <template #footer>

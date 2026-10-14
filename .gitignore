@@ -374,3 +374,11 @@ components.d.ts
 .wxt
 var
 .vscfavoriterc
+
+.cursor/*
+!.cursor/rules/
+.claude/settings.local.json
+CLAUDE.local.md
+
+# AI SDLC working artifacts (intent/spec/plan) are local working documents, never committed
+specs/

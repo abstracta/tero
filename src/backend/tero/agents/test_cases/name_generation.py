@@ -49,7 +49,7 @@ async def generate_test_case_name(
         response = await llm.ainvoke([HumanMessage(prompt)])
         response = cast(AIMessage, response)
         message_usage.increment_with_metadata(response.usage_metadata, model)
-        content = cast(str, response.content).strip()
+        content = response.text.strip()
         if len(content) > MAX_THREAD_NAME_LENGTH:
             content = content[:MAX_THREAD_NAME_LENGTH]
         return content

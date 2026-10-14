@@ -10,7 +10,7 @@ from langchain_core.messages import (
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from ..ai_models import ai_factory
-from ..ai_models.domain import LlmTemperature, LlmModel, ReasoningEffort
+from ..ai_models.domain import LlmTemperature, LlmModel, LlmModelType, ReasoningEffort
 from ..ai_models.repos import AiModelRepository
 from ..core.env import env
 from ..threads.core import trim_messages_to_fit_model
@@ -28,10 +28,11 @@ async def estimate_minutes_saved(user_message: str, agent_response: str, thread:
     internal_generator_model = cast(LlmModel, await AiModelRepository(db).find_by_id(env.internal_generator_model))
     internal_evaluator_model = cast(LlmModel, await AiModelRepository(db).find_by_id(evaluator_model_id))
     feedback_messages = await ThreadMessageRepository(db).find_feedback_messages(thread.agent_id, thread.user_id, limit=4)
+    is_reasoning = internal_evaluator_model.model_type == LlmModelType.REASONING
     llm = ai_factory.build_chat_model(
-        evaluator_model_id,
-        LlmTemperature.PRECISE.get_float(),
-        ReasoningEffort.MEDIUM.value.lower(),
+        env.internal_evaluator_model,
+        None if is_reasoning else LlmTemperature.PRECISE.get_float(),
+        ReasoningEffort.MEDIUM.value.lower() if is_reasoning else None,
     )
 
     messages = [
@@ -75,7 +76,7 @@ async def estimate_minutes_saved(user_message: str, agent_response: str, thread:
 
     response = await llm.ainvoke([SystemMessage(system_prompt)])
     try:
-        return int(response.content.strip())
+        return int(response.text.strip())
     except ValueError:
         logger.exception(f"Invalid int response from minutes saved estimation LLM: {response.content}")
         return 0

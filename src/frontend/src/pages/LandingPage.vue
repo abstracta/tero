@@ -30,9 +30,8 @@ async function login() {
             {{ t("description") }}
           </p>
           <SimpleButton size="large" shape="square" class="gap-2" @click="login">
-            <img src="@/assets/images/keycloak-icon.svg" alt="Keycloak" class="w-4 h-4 sm:w-5 sm:h-5" v-if="keycloakLogin" />
-            <img src="@/assets/images/google-icon.svg" alt="Google" class="w-4 h-4 sm:w-5 sm:h-5" v-else />
-            <span>{{ t(keycloakLogin ? "keycloakLogin" : "googleLogin") }}</span>
+            <img src="@/assets/images/google-icon.svg" alt="Google" class="w-4 h-4 sm:w-5 sm:h-5" v-if="!keycloakLogin" />
+            <span>{{ t(keycloakLogin ? "signIn" : "googleLogin") }}</span>
           </SimpleButton>
         </div>
       </div>
@@ -46,13 +45,13 @@ async function login() {
     "welcome": "Welcome to",
     "description": "Discover, create and collaborate with artificial intelligence agents designed to enhance your day-to-day. Connect and start harnessing their power.",
     "googleLogin": "Continue with Google",
-    "keycloakLogin": "Continue with Keycloak"
+    "signIn": "Sign in"
   },
   "es": {
     "welcome": "Te damos la bienvenida a",
     "description": "Descubre, crea y colabora con agentes de inteligencia artificial diseñados para potenciar tu día a día. Conéctate y empieza a aprovechar su poder.",
     "googleLogin": "Continuar con Google",
-    "keycloakLogin": "Continuar con Keycloak"
+    "signIn": "Iniciar sesión"
   }
 }
 </i18n>

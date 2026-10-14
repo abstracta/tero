@@ -15,6 +15,11 @@ class Role(str, Enum):
     TEAM_OWNER = "owner"
     TEAM_MEMBER = "member"
     TEAM_EDITOR = "editor"
+    BUDGET_OWNER = "budget_owner"
+
+
+OWNER_ROLES = (Role.BUDGET_OWNER, Role.TEAM_OWNER)
+EDITOR_ROLES = (*OWNER_ROLES, Role.TEAM_EDITOR)
 
 
 class Team(SQLModel, table=True):
@@ -22,7 +27,7 @@ class Team(SQLModel, table=True):
     name: str = Field(max_length=100)
     team_roles: List["TeamRole"] = Relationship(back_populates="team")
 
- 
+
 class TeamRoleUpdate(BaseModel):
     role: Role
 
@@ -60,11 +65,13 @@ class AddUsersToTeam(CamelCaseModel):
 
 class TeamUser(CamelCaseModel):
     id: int
-    username: str 
+    username: str
     name: Optional[str] = None
     role: Role
     role_status: TeamRoleStatus
     verified: bool = False
+    exclude_from_metrics: bool = False
+    monthly_usd_limit: Optional[int] = None
 
 
 class TeamUpdate(CamelCaseModel):

@@ -11,5 +11,6 @@ async def test_manifest(client: AsyncClient):
             "clientId": env.openid_client_id,
             "scope": env.openid_scope
         },
-        "disablePublishGlobal": env.disable_publish_global or False
+        "disablePublishGlobal": env.disable_publish_global or False,
+        "maxFileSizeMb": env.max_file_size_mb,
     }

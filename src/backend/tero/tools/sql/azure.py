@@ -1,30 +1,14 @@
 import logging
 import struct
 import time
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from typing import Optional, cast
+from typing import Optional
 
 from langchain_community.utilities import SQLDatabase
-from pydantic import AnyHttpUrl
 from sqlalchemy import Engine, create_engine, text
 
-from ..auth import (
-    AgentToolOauth,
-    OAuthMetadata,
-    ToolAuthCallback,
-    ToolAuthCallbackError,
-    ToolAuthRepository,
-    ToolAuthRequestException,
-    ToolAuthTokenRequest,
-    ToolOAuthCallback,
-    ToolOAuthClientInfo,
-    ToolOAuthClientInfoRepository,
-)
-from .sql_backend import SqlBackend
-from .sql_auth import SqlAuth
+from ..core import UserFacingToolError
+from .sql_backend import DEFAULT_MAX_STRING_LENGTH, SqlBackend
 
-_AZURE_SQL_SCOPE = "https://database.windows.net/user_impersonation offline_access"
 _SQL_COPT_SS_ACCESS_TOKEN = 1256
 _CONNECT_RETRIES = 3
 _CONNECT_RETRY_BACKOFF_S = 20
@@ -37,7 +21,7 @@ class AzureSqlBackend(SqlBackend):
         self._server = server
         self._access_token = access_token
         self._engines: dict[str, Engine] = {}
-        self._databases: dict[tuple[str, Optional[str]], SQLDatabase] = {}
+        self._databases: dict[tuple[str, Optional[str], int], SQLDatabase] = {}
         self._known_databases: Optional[list[str]] = None
 
     def _make_connection(self, database: str):
@@ -87,16 +71,21 @@ class AzureSqlBackend(SqlBackend):
         if self._known_databases is None:
             self._known_databases = self.list_databases()
         if database not in self._known_databases:
-            raise ValueError(
+            raise UserFacingToolError(
                 f"Unknown database '{database}'. "
                 f"Available databases: {', '.join(self._known_databases)}"
             )
 
-    def get_sql_database(self, name: str, schema: Optional[str] = None) -> SQLDatabase:
+    def get_sql_database(
+        self, name: str, schema: Optional[str] = None, max_string_length: Optional[int] = None
+    ) -> SQLDatabase:
         self._validate_database(name)
-        key = (name, schema)
+        limit = max_string_length or DEFAULT_MAX_STRING_LENGTH
+        key = (name, schema, limit)
         if key not in self._databases:
-            self._databases[key] = SQLDatabase(self._get_engine(name), schema=schema)
+            self._databases[key] = SQLDatabase(
+                self._get_engine(name), schema=schema, max_string_length=limit
+            )
         return self._databases[key]
 
     def list_databases(self) -> list[str]:
@@ -123,77 +112,3 @@ class AzureSqlBackend(SqlBackend):
             engine.dispose()
         self._engines.clear()
         self._databases.clear()
-
-
-class AzureAuth(SqlAuth):
-    def _auth_config(self, config: dict) -> dict:
-        return {k: config[k] for k in ("server", "azureTenantId", "azureClientId") if k in config}
-
-    async def setup(self, prev_config):
-        tool = self._tool
-        client_info_repo = ToolOAuthClientInfoRepository(tool.db)
-        client_secret = tool._get_secret("azureClientSecret")
-        if client_secret is None:
-            existing = await client_info_repo.find_by_ids(tool.agent.id, tool.id)
-            client_secret = existing.client_secret if existing else None
-        if prev_config and self._auth_config(prev_config.config) != self._auth_config(tool.config):
-            await self.teardown()
-        await client_info_repo.save(ToolOAuthClientInfo(
-            agent_id=tool.agent.id,
-            tool_id=tool.id,
-            client_id=tool.config["azureClientId"],
-            client_secret=client_secret,
-            token_endpoint_auth_method="client_secret_post",
-            scope=_AZURE_SQL_SCOPE,
-        ))
-        async with tool.load():
-            pass
-
-    async def teardown(self):
-        tool = self._tool
-        await ToolAuthRepository(tool.db).delete_token(tool.user_id, tool.agent.id, tool.id)
-        await ToolOAuthClientInfoRepository(tool.db).delete(tool.agent.id, tool.id)
-
-    def _build_oauth(self) -> AgentToolOauth:
-        tool = self._tool
-        tenant_id = tool.config["azureTenantId"]
-        base = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0"
-        metadata = OAuthMetadata(
-            issuer=AnyHttpUrl(f"https://login.microsoftonline.com/{tenant_id}/v2.0"),
-            authorization_endpoint=AnyHttpUrl(f"{base}/authorize"),
-            token_endpoint=AnyHttpUrl(f"{base}/token"),
-            code_challenge_methods_supported=["S256"],
-        )
-        return AgentToolOauth(
-            server_url=f"https://login.microsoftonline.com/{tenant_id}/v2.0",
-            metadata=metadata,
-            scope=_AZURE_SQL_SCOPE,
-            agent_id=tool.agent.id,
-            tool_id=tool.id,
-            user_id=tool.user_id,
-            db=tool.db,
-        )
-
-    @asynccontextmanager
-    async def get_backend(self) -> AsyncIterator[AzureSqlBackend]:
-        tool = self._tool
-        oauth = self._build_oauth()
-        tokens = await oauth.solve_tokens()
-        if not tokens:
-            raise ToolAuthRequestException(ToolAuthTokenRequest(tool_id=tool.id, agent_id=tool.agent.id))
-        backend = AzureSqlBackend(tool.config["server"], tokens.access_token)
-        try:
-            yield backend
-        finally:
-            backend.close()
-
-    async def auth(self, auth_callback: ToolAuthCallback):
-        tool = self._tool
-        state = await ToolAuthRepository(tool.db).find_state(
-            tool.user_id,
-            tool.id,
-            cast(ToolOAuthCallback, auth_callback).state,
-        )
-        if not state:
-            raise ToolAuthCallbackError("OAuth state not found")
-        await self._build_oauth().callback(cast(ToolOAuthCallback, auth_callback), state)

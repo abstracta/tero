@@ -4,9 +4,9 @@ from enum import Enum
 import io
 import json
 import logging
-from typing import Annotated, Optional, List, AsyncIterator, cast
+from typing import Annotated, Any, Optional, List, AsyncIterator, cast
 
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, Request, File as FastAPIFile
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, Request, File as FastAPIFile, Query
 from fastapi.responses import StreamingResponse
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sse_starlette.event import ServerSentEvent
@@ -21,21 +21,22 @@ from ..core.domain import CamelCaseModel
 from ..core.env import env
 from ..core import repos
 from ..core.repos import get_db
-from .agents_store import get_store
+from .agents_store import agent_store_namespace, clear_store_namespace, get_store
 from ..files.api import build_file_download_response
 from ..files.core import FileQuota, CurrentQuota, QuotaExceededError, add_encoding_to_content_type
 from ..files.domain import File, FileStatus, FileMetadata, FileProcessor, FileMetadataWithContent
 from ..files.parser import extract_file_text
 from ..files.processors.pdf import is_enhanced_pdf_processor_available
 from ..files.repos import FileRepository
-from ..tools.auth import ToolAuthRequestException, build_tool_auth_request_http_exception
+from ..tools.auth import OwnerConfiguredToolAuthError, ToolAuthRequestException, build_tool_auth_request_http_exception
+from ..tools.codebase.tool import CodebaseNotSyncedError
 from ..usage.domain import Usage, UsageType, MessageUsage
 from ..usage.repos import UsageRepository
 from ..users.domain import User
 from .domain import ThreadListItem, Thread, ThreadMessage, ThreadMessageOrigin, ThreadUpdate,\
     ThreadMessagePublic, ThreadMessageFile, ThreadMessageUpdate, AgentActionEvent, AgentFileEvent,\
-    AgentMessageEvent, ThreadTranscriptionResult, ModelRateLimitError
-from .engine import build_thread_name, AgentEngine, agent_store_namespace
+    AgentMessageEvent, ThreadTranscriptionResult, ModelRateLimitError, StatusDetailPublic
+from .engine import build_thread_name, AgentEngine
 from .repos import ThreadRepository, ThreadMessageRepository, ThreadMessageFileRepository
 from .time_saved_estimation import estimate_minutes_saved
 
@@ -52,8 +53,9 @@ async def find_threads(user: Annotated[User, Depends(get_current_user)],
                        text: Optional[str] = None,
                        limit: int = 10,
                        agent_id: Optional[int] = None,
-                       exclude_empty: bool = False) -> List[ThreadListItem]:
-    return await ThreadRepository(db).find_by_text(text, user.id, limit, agent_id, exclude_empty)
+                       exclude_empty: bool = False,
+                       offset: int = 0) -> List[ThreadListItem]:
+    return await ThreadRepository(db).find_by_text(text, user, limit, agent_id, exclude_empty, offset)
 
 
 class ThreadCreateApi(CamelCaseModel):
@@ -85,7 +87,7 @@ THREAD_PATH = f"{THREADS_PATH}/{{thread_id}}"
 async def find_thread(thread_id: int, user: Annotated[User, Depends(get_current_user)],
         db: Annotated[AsyncSession, Depends(get_db)]) -> ThreadListItem:
     ret = await _find_thread(thread_id, user.id, db)
-    return ThreadListItem.from_thread(ret)
+    return await _to_thread_list_item(ret, user, db)
 
 
 async def _find_thread(thread_id: int, user_id: int, db: AsyncSession) -> Thread:
@@ -95,13 +97,18 @@ async def _find_thread(thread_id: int, user_id: int, db: AsyncSession) -> Thread
     return ret
 
 
+async def _to_thread_list_item(thread: Thread, user: User, db: AsyncSession) -> ThreadListItem:
+    agents = await AgentRepository(db).build_agent_list_items_for_user([thread.agent], user)
+    return ThreadListItem.from_thread(thread, agent=agents[thread.agent_id])
+
+
 @router.put(THREAD_PATH)
 async def update_thread(thread_id: int, thread: ThreadUpdate, user: Annotated[User, Depends(get_current_user)],
         db: Annotated[AsyncSession, Depends(get_db)]) -> ThreadListItem:
     ret = await _find_thread(thread_id, user.id, db)
     ret.update_with(thread)
     await ThreadRepository(db).update(ret)
-    return ThreadListItem.from_thread(ret)
+    return await _to_thread_list_item(ret, user, db)
 
 
 @router.delete(THREAD_PATH, status_code=status.HTTP_204_NO_CONTENT)
@@ -111,12 +118,7 @@ async def delete_thread(thread_id: int, user: Annotated[User, Depends(get_curren
     thread = await _find_thread(thread_id, user.id, db)
     try:
         namespace = agent_store_namespace(user.id, thread_id)
-        while True:
-            items = await store.asearch(namespace, limit=100)
-            if not items:
-                break
-            for item in items:
-                await store.adelete(namespace, item.key)
+        await clear_store_namespace(store, namespace)
 
     except Exception:
         logger.warning(
@@ -138,7 +140,7 @@ async def find_messages(thread_id: int, user: Annotated[User, Depends(get_curren
 
 
 def _map_messages_to_tree(messages: List[ThreadMessage]) -> List[ThreadMessagePublic]:
-    public_messages = [ThreadMessagePublic.from_message(msg) for msg in messages]
+    public_messages = [to_public_message(msg) for msg in messages]
     message_lookup = {msg.id: msg for msg in public_messages}
     tree = []
     for msg in public_messages:
@@ -147,6 +149,16 @@ def _map_messages_to_tree(messages: List[ThreadMessage]) -> List[ThreadMessagePu
         else:
             tree.append(msg)
     return tree
+
+
+def to_public_message(message: ThreadMessage) -> ThreadMessagePublic:
+    public = ThreadMessagePublic.from_message(message)
+    if public.status_updates:
+        public.status_updates = [
+            preview_status_update(event) if isinstance(event, dict) else event
+            for event in public.status_updates
+        ]
+    return public
 
 
 class ThreadMessageOriginApi(Enum):
@@ -158,6 +170,8 @@ async def add_message(thread_id: int, request: Request, user: Annotated[User, De
         db: Annotated[AsyncSession, Depends(get_db)],
         store: Annotated[BaseStore, Depends(get_store)], files: List[UploadFile] = []) -> StreamingResponse:
     thread = await _find_thread(thread_id, user.id, db)
+    if not thread.agent.is_visible_by(user):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Agent not found")
     current_usage = await UsageRepository(db).find_current_month_user_usage_usd(user.id)
     if current_usage >= user.monthly_usd_limit:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail="quotaExceeded")
@@ -165,6 +179,7 @@ async def add_message(thread_id: int, request: Request, user: Annotated[User, De
     form = await request.form()
     message_text = cast(str, form.get("text", ""))
     message_origin = cast(str, form.get("origin", "USER"))
+    collapsed_name = cast(Optional[str], form.get("collapsedName"))
     file_ids_str = cast(str, form.get("fileIds"))
     file_ids = [ int(file_id) for file_id in file_ids_str.split(",") ] if file_ids_str else []
     parent_message_id_str = cast(Optional[str], form.get("parentMessageId"))
@@ -176,13 +191,14 @@ async def add_message(thread_id: int, request: Request, user: Annotated[User, De
     existing_files = [ await _find_thread_message_file(thread_id, file_id, db) for file_id in file_ids ]
     try:
         # initialize engine so any tool authentication requirements are triggered before creating anything on db
-        engine = AgentEngine(thread.agent, user.id, db, store)
+        engine = AgentEngine(thread.agent, user.id, store)
         async with AsyncExitStack() as stack:
-            await engine.load_tools(stack)
+            await engine.load_tools_including_subagents(stack)
 
         initial_thread_message = ThreadMessage(
             thread_id=thread.id,
             text=message_text,
+            collapsed_name=collapsed_name,
             origin=ThreadMessageOrigin[message_origin],
             parent_id=parent_message_id
         )
@@ -199,7 +215,8 @@ async def add_message(thread_id: int, request: Request, user: Annotated[User, De
         )
     except ToolAuthRequestException as e:
         raise build_tool_auth_request_http_exception(e.request)
-
+    except OwnerConfiguredToolAuthError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="ownerConfiguredToolAuth")
     except QuotaExceededError:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail="quotaExceeded")
 
@@ -270,7 +287,7 @@ async def _agent_response(message: ThreadMessage, thread: Thread, user_id: int, 
                 parent_message_id=message.id,
             ))
 
-        answer_stream = AgentEngine(thread.agent, user_id, db, store).answer([*thread_messages, message], message_usage, stop_event)
+        answer_stream = AgentEngine(thread.agent, user_id, store).answer([*thread_messages, message], message_usage, stop_event)
         thread_title_sent = False
 
         async for event in answer_stream:
@@ -281,7 +298,7 @@ async def _agent_response(message: ThreadMessage, thread: Thread, user_id: int, 
                     yield ServerSentEvent(event="threadUpdated", data=json.dumps({"name": thread_name})).encode()
             if isinstance(event, AgentActionEvent):
                 status_updates.append(event)
-                payload = json.dumps(event.model_dump(mode="json", by_alias=True))
+                payload = json.dumps(preview_status_update(event.model_dump(mode="json", by_alias=True)))
                 yield ServerSentEvent(event="status", data=payload).encode()
             elif isinstance(event, AgentFileEvent):
                 files.append(event.file)
@@ -374,6 +391,24 @@ async def _agent_response(message: ThreadMessage, thread: Thread, user_id: int, 
             status_updates=_dump_status_updates(status_updates)
         ))
         yield ServerSentEvent(event="error", data="modelRateLimitExceeded").encode()
+    except* OwnerConfiguredToolAuthError:
+        await repo.add(ThreadMessage(
+            thread_id=thread.id,
+            text="ERROR_OWNER_CONFIGURED",
+            origin=ThreadMessageOrigin.SYSTEM,
+            parent_id=message.id,
+            status_updates=_dump_status_updates(status_updates)
+        ))
+        yield ServerSentEvent(event="error", data="ownerConfiguredToolAuth").encode()
+    except* CodebaseNotSyncedError:
+        await repo.add(ThreadMessage(
+            thread_id=thread.id,
+            text="ERROR_CODEBASE_NOT_SYNCED",
+            origin=ThreadMessageOrigin.SYSTEM,
+            parent_id=message.id,
+            status_updates=_dump_status_updates(status_updates)
+        ))
+        yield ServerSentEvent(event="error", data="codebaseNotSynced").encode()
     except* Exception:
         logger.exception(f"Problem answering message in thread {thread.id}")
         await repo.add(ThreadMessage(
@@ -461,6 +496,44 @@ async def _save_interrupted_message(thread_id: int, interrupted_msg: ThreadMessa
 def _dump_status_updates(status_updates: List[AgentActionEvent]) -> Optional[List[dict]]:
     return [event.model_dump(mode="json", by_alias=True) for event in status_updates] if status_updates else None
 
+
+_STATUS_DETAIL_PREVIEW_LENGTH = 120
+
+
+def preview_status_update(event: dict) -> dict:
+    preview = _preview_args(event)
+    result = preview.get("result")
+    if not isinstance(result, list):
+        return preview
+    return {**preview, "result": [_preview_result_item(item, index) for index, item in enumerate(result)]}
+
+
+def _preview_args(event: dict) -> dict:
+    args = event.get("args")
+    if args is None:
+        return event
+    text = args if isinstance(args, str) else json.dumps(args, ensure_ascii=False)
+    if len(text) <= _STATUS_DETAIL_PREVIEW_LENGTH:
+        return event
+    return {**event, "args": text[:_STATUS_DETAIL_PREVIEW_LENGTH], "argsPath": "args"}
+
+
+def _preview_result_item(item: Any, index: int) -> Any:
+    if not isinstance(item, dict):
+        return item
+    content = item.get("content")
+    if not isinstance(content, str) or len(content) <= _STATUS_DETAIL_PREVIEW_LENGTH:
+        return item
+    return {**item, "content": content[:_STATUS_DETAIL_PREVIEW_LENGTH], "path": f"result/{index}/content"}
+
+
+def _resolve_status_detail(updates: list, path: str) -> Any:
+    node: Any = updates
+    for part in path.split("/"):
+        node = node[int(part)] if part.isdigit() else node[part]
+    return node
+
+
 @router.post(THREAD_PATH + "/stop", status_code=status.HTTP_200_OK)
 async def stop_message(thread_id: int,
                       user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
@@ -501,11 +574,32 @@ async def update_message(thread_id: int, message_id: int, updated_message: Threa
     return thread_message
 
 
-async def _find_thread_message(message_id:int, db: AsyncSession) -> ThreadMessage:
-    ret = await ThreadMessageRepository(db).find_by_id(message_id)
+async def _find_thread_message(message_id: int, db: AsyncSession, user_id: Optional[int] = None) -> ThreadMessage:
+    ret = await ThreadMessageRepository(db).find_by_id(message_id, user_id)
     if not ret:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     return ret
+
+
+THREAD_MESSAGE_DETAIL_PATH = f"{THREADS_PATH}/messages/{{message_id}}/detail"
+
+
+@router.get(THREAD_MESSAGE_DETAIL_PATH)
+async def find_thread_message_detail(
+    message_id: int,
+    path: Annotated[str, Query()],
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> StatusDetailPublic:
+    message = await _find_thread_message(message_id, db, user.id)
+    try:
+        value = _resolve_status_detail(message.status_updates or [], path)
+    except (KeyError, IndexError, TypeError, ValueError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if not isinstance(value, str):
+        value = json.dumps(value, ensure_ascii=False)
+    return StatusDetailPublic(value=value)
+
 
 THREAD_FILE_PATH = f"{THREAD_PATH}/files/{{file_id}}"
 

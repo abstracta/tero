@@ -16,12 +16,14 @@ export class EditingToolConfig {
   icon: Icon
   toolId: string
   config?: Record<string, unknown>
+  toolMetadata?: Record<string, unknown> | null
 
   constructor(agentId: number, tool: AgentTool, name: string, icon: Icon, toolConfig?: AgentToolConfig) {
     this.agentId = agentId
     this.tool = tool
     this.toolId = toolConfig?.toolId ?? tool.id
     this.config = toolConfig?.config
+    this.toolMetadata = toolConfig?.toolMetadata
     this.name = name
     this.icon = icon
   }
@@ -33,11 +35,15 @@ import { ref, computed, onMounted, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ApiService, findManifest, HttpError } from '@/services/api'
 import CopyButton from '@tero/common/components/common/CopyButton.vue'
-import { buildToolConfigName, toolTranslationKey } from '@tero/common/utils/toolConfig.js'
+import { isSubagentToolId, toolIdKey, toolTranslationKey } from '@tero/common/utils/toolConfig.js'
+import AgentSubagentPicker from './AgentSubagentPicker.vue'
+import moment from 'moment'
 
 const props = defineProps<{
   toolConfig: EditingToolConfig
   viewMode?: boolean
+  excludeAgentIds?: number[]
+  parentTeamId?: number | null
 }>()
 
 const emit = defineEmits<{
@@ -50,8 +56,11 @@ const api = new ApiService()
 const { handleError } = useErrorHandler()
 const validationErrors = ref<string | null>(null)
 const saving = ref(false)
+const showSaveLoading = ref(false)
 const contactEmail = ref<string>('')
-const savedConfig = ref<Record<string, unknown> | undefined>()
+const maxFileSizeMb = ref<number>()
+const savedConfig = ref<Record<string, unknown> | undefined>(props.toolConfig.config ? { ...props.toolConfig.config } : undefined)
+const toolMetadata = ref<Record<string, unknown> | null | undefined>(props.toolConfig.toolMetadata)
 const allFilesRemoved = ref(false)
 const lastAutoSavedAt = ref<Date | null>(null)
 const autosaveStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
@@ -63,10 +72,12 @@ if (Array.isArray(props.toolConfig.config?.customHeaders)) {
 const mutableConfig = reactive(baseMutableConfig)
 let partialSave = false
 
+
 onMounted(async () => {
   try {
     const manifest = await findManifest()
     contactEmail.value = manifest.contactEmail
+    maxFileSizeMb.value = manifest.maxFileSizeMb
     savedConfig.value = props.toolConfig.config
     initializeToolConfig()
   } catch (error) {
@@ -77,7 +88,8 @@ onMounted(async () => {
 const initializeToolConfig = () => {
   Object.entries(toolProperties.value).forEach(([propName, propSchema]) => {
     if (isBooleanProperty(propSchema) && mutableConfig[propName] === undefined) {
-      mutableConfig[propName] = false
+      const defaultValue = js7(propSchema)!.default
+      mutableConfig[propName] = defaultValue !== undefined ? defaultValue : false
     }
     if (isStringEnumProperty(propSchema) && mutableConfig[propName] === undefined) {
       const defaultEnumValue = js7(propSchema)!.default
@@ -179,7 +191,8 @@ const isEnableOnlyTool = computed(() => isBrowserTool.value || isWebTool.value)
 const showsOAuthRedirect = computed(() =>
   (props.toolConfig.tool.configSchema as Record<string, unknown>)['x-oauth-redirect'] === true
 )
-const oauthCallbackUrl = computed(() => `${window.location.origin}/tools/${props.toolConfig.tool.id}/oauth-callback`)
+// tools with several configs per agent share a single callback url, so the wildcard is removed from the id
+const oauthCallbackUrl = computed(() => `${window.location.origin}/tools/${toolIdKey(props.toolConfig.tool.id)}/oauth-callback`)
 
 const toolAlertMessage = computed(() => {
   const toolAlertMessageKey = buildToolPropertyTranslationKey(props.toolConfig.tool.id, 'toolAlertMessage')
@@ -189,6 +202,17 @@ const toolAlertMessage = computed(() => {
 
 const toolAlertGuideMessage = computed(() => {
   const toolAlertGuideKey = buildToolPropertyTranslationKey(props.toolConfig.tool.id, 'toolAlertGuideMessage')
+  if (props.toolConfig.tool.id === 'codebase') {
+    if (!toolMetadata.value?.commitId) {
+      return null
+    }
+    const syncedAt = toolMetadata.value.syncedAt
+    const ret = t(toolAlertGuideKey, {
+      commitId: (toolMetadata.value.commitId as string).substring(0, 7),
+      syncedAt: syncedAt ? moment(syncedAt as string).format('DD MMM YYYY HH:mm') : '',
+    })
+    return ret != toolAlertGuideKey ? ret : null
+  }
   const ret = t(toolAlertGuideKey)
   return ret != toolAlertGuideKey ? ret : null
 })
@@ -197,9 +221,19 @@ const hasFileProperties = computed(() =>
   Object.values(toolProperties.value).some(prop => isFileProperty(prop) || isFileArrayProperty(prop))
 )
 
+const isCodebaseTool = computed(() => props.toolConfig.tool.id === 'codebase')
+
+const isSyncMode = computed(() => {
+  if (!isCodebaseTool.value || !savedConfig.value) return false
+  return JSON.stringify(savedConfig.value) === JSON.stringify(mutableConfig)
+})
+
 const saveButtonText = computed(() => {
   if (isEnableOnlyTool.value) {
     return 'add'
+  }
+  if (isSyncMode.value) {
+    return 'sync'
   }
   return hasFileProperties.value ? 'done' : 'save'
 })
@@ -207,6 +241,8 @@ const saveButtonText = computed(() => {
 const isDoneDisabled = computed(() => {
   return saving.value || (hasFileProperties.value && !savedConfig.value && !allFilesRemoved.value)
 })
+
+const isFormDisabled = computed(() => props.viewMode || saving.value)
 
 const autosaveMessage = computed(() => {
   switch (autosaveStatus.value) {
@@ -260,6 +296,10 @@ const isStringEnumProperty = (toolProp: JSONSchema7Definition) : boolean => {
 const isSecretStringProperty = (toolProp: JSONSchema7Definition) : boolean => {
   const toolPropSchema = js7(toolProp)!
   return toolPropSchema.type === 'string' && toolPropSchema.writeOnly === true
+}
+
+const isSubagentAgentIdProperty = (propName: string): boolean => {
+  return propName === 'agentId' && isSubagentToolId(props.toolConfig.tool.id)
 }
 
 const translateOptionLabel = (propName: string, option: string) : string => {
@@ -325,9 +365,33 @@ const cleanupCustomHeaders = () => {
   })
 }
 
-const saveToolConfig = async () => {
+const syncToolRepo = async () => {
   saving.value = true
   clearValidationErrors()
+  const loadingTimer = setTimeout(() => { showSaveLoading.value = true }, 500)
+  try {
+    toolMetadata.value = (await api.syncAgentTool(props.toolConfig.agentId, props.toolConfig.toolId)).toolMetadata
+    emit('update', new AgentToolConfig(props.toolConfig.toolId, mutableConfig, toolMetadata.value))
+  } catch (error) {
+    if (error instanceof HttpError && (error.status === 400 || error.status === 401)) {
+      validationErrors.value = t('invalidToolConfiguration', { contactEmail: contactEmail.value })
+    } else {
+      await handleError(error)
+    }
+  } finally {
+    clearTimeout(loadingTimer)
+    showSaveLoading.value = false
+    saving.value = false
+  }
+}
+
+const saveToolConfig = async () => {
+  if (isSyncMode.value) {
+    return syncToolRepo()
+  }
+  saving.value = true
+  clearValidationErrors()
+  const loadingTimer = setTimeout(() => { showSaveLoading.value = true }, 500)
   try {
     cleanupCustomHeaders()
     validateToolConfig()
@@ -347,6 +411,9 @@ const saveToolConfig = async () => {
         }
       }, api, { skipTokenAuth: true })
       partialSave = false
+      savedConfig.value = ret.config
+      Object.assign(mutableConfig, ret.config)
+      toolMetadata.value = ret.toolMetadata
     }
     emit('update', ret)
   } catch (error) {
@@ -355,13 +422,28 @@ const saveToolConfig = async () => {
       validationErrors.value = t(error.errorCode)
     } else if (error instanceof ValidationErrors) {
       validationErrors.value = error.message
+    } else if (error instanceof HttpError && isDuplicateToolConfigError(error)) {
+      validationErrors.value = t('duplicateToolConfiguration')
     } else if (error instanceof HttpError && (error.status === 400 || error.status === 401)) {
       validationErrors.value = t('invalidToolConfiguration', { contactEmail: contactEmail.value })
     } else {
       await handleError(error)
     }
   } finally {
+    clearTimeout(loadingTimer)
+    showSaveLoading.value = false
     saving.value = false
+  }
+}
+
+const isDuplicateToolConfigError = (error: HttpError) : boolean => {
+  if (error.status !== 400) {
+    return false
+  }
+  try {
+    return JSON.parse(error.body).detail === 'Duplicate tool configuration'
+  } catch (_) {
+    return false
   }
 }
 
@@ -397,6 +479,14 @@ const findValidationErrorMessage = (error: ErrorObject, toolId: string) : string
       return t('invalidPropertyFormat', { property: translateToolPropertyName(toolId, property), format: t(error.params.format + 'Format') })
     case 'minLength':
       return t('invalidPropertyMinLength', { property: translateToolPropertyName(toolId, property), minLength: error.params.limit }, error.params.limit)
+    case 'pattern': {
+      const patternErrorKey = buildToolPropertyTranslationKey(toolId, property) + 'PatternError'
+      const patternError = t(patternErrorKey)
+      if (patternError !== patternErrorKey) {
+        return patternError
+      }
+      return t('invalidPropertyPattern', { property: translateToolPropertyName(toolId, property) })
+    }
     default:
       throw new Error(`UnknownValidationError: ${error.keyword}`)
   }
@@ -419,7 +509,7 @@ class ValidationErrors extends Error {
       <div class="flex w-full items-center justify-between">
         <div class="flex gap-2 items-center">
           <component :is="toolConfig.icon" />
-          {{ buildToolConfigName(props.toolConfig.toolId) }}
+          {{ toolConfig.name }}
         </div>
         <SimpleButton @click="onClose" :disabled="saving">
           <IconX />
@@ -435,12 +525,12 @@ class ValidationErrors extends Error {
             <span v-html="toolAlertMessage" class="inline pt-0.5"></span>
             <div v-if="showsOAuthRedirect" class="mt-1 flex items-center gap-1">
               {{ oauthCallbackUrl }}
-              <CopyButton :text="oauthCallbackUrl" @error="handleError" />
+              <CopyButton compact :text="oauthCallbackUrl" v-tooltip.bottom="t('copyButton')" @error="handleError" />
             </div>
             <span
-              v-if="showsOAuthRedirect && toolAlertGuideMessage"
+              v-if="toolAlertGuideMessage"
               v-html="toolAlertGuideMessage"
-              class="inline">
+              :class="isCodebaseTool ? 'mt-1 text-content-muted text-xs' : 'inline'">
             </span>
           </div>
         </div>
@@ -454,22 +544,12 @@ class ValidationErrors extends Error {
               :tool-id="toolConfig.tool.id"
               :configured-tool="savedConfig != undefined"
               :contact-email="contactEmail"
+              :max-file-size-mb="maxFileSizeMb"
               :view-mode="viewMode"
               :allowed-extensions="(toolProperties[propName] as any)?.['x-allowed-extensions']"
               :max-files="isFileProperty(toolProperties[propName]) ? 1 : undefined"
               :on-before-file-upload="onBeforeFileUpload"
               :on-after-file-remove="onAfterFileRemove"/>
-        </div>
-        <div v-else-if="isBooleanProperty(toolProperties[propName])" class="flex gap-2 border-t p-6 -mx-6 flex-col">
-          <span class="font-semibold text-sm">{{ t('advancedOptions') }}</span>
-          <div class="flex w-full flex-row gap-4 items-center">
-            <ToggleSwitch
-                v-model="mutableConfig[propName] as boolean"
-                v-tooltip.bottom="solveToolPropertyTooltip(toolConfig.tool.id, propName, mutableConfig[propName])"
-                @update:model-value="onBeforeFileUpload"
-                :disabled="viewMode" />
-            <span v-html="translateToolPropertyName(toolConfig.tool.id, propName)"></span>
-         </div>
         </div>
         <div v-else-if="isArrayEnumProperty(toolProperties[propName])">
           <AgentToolConfigEnumPropertyEditor
@@ -479,7 +559,23 @@ class ValidationErrors extends Error {
               :option-values="js7(js7(toolProperties[propName])!.items)!.enum as string[]"
               :option-labels="translateOptionLabel"
               :description="solveToolPropertyHelperText(toolConfig.tool.id, propName)"
-              :view-mode="viewMode"/>
+              :view-mode="isFormDisabled"/>
+        </div>
+        <div v-else-if="isSubagentAgentIdProperty(propName)" class="flex flex-col gap-1">
+          <label :for="propName" class="text-sm font-semibold">{{ translateToolPropertyName(toolConfig.tool.id, propName) }}</label>
+          <AgentSubagentPicker
+            v-model="(mutableConfig.agentId as number | null)"
+            :input-id="propName"
+            :exclude-agent-ids="[toolConfig.agentId, ...(excludeAgentIds ?? [])]"
+            :parent-team-id="parentTeamId"
+            :disabled="isFormDisabled"
+            @update:model-value="clearValidationErrors"
+          />
+          <p
+            v-if="solveToolPropertyHelperText(toolConfig.tool.id, propName)"
+            class="text-sm text-content-muted">
+            {{ solveToolPropertyHelperText(toolConfig.tool.id, propName) }}
+          </p>
         </div>
         <div v-else-if="isStringEnumProperty(toolProperties[propName])" class="flex flex-col gap-1">
           <label :for="propName" class="text-sm font-semibold">{{ translateToolPropertyName(toolConfig.tool.id, propName) }}</label>
@@ -490,7 +586,7 @@ class ValidationErrors extends Error {
               optionLabel="label"
               optionValue="value"
               class="w-1/2 my-1"
-              :disabled="viewMode"
+              :disabled="isFormDisabled"
               @change="clearValidationErrors"/>
           <p
             v-if="solveToolPropertyHelperText(toolConfig.tool.id, propName)"
@@ -503,7 +599,7 @@ class ValidationErrors extends Error {
           v-model="mutableConfig[propName] as Array<Record<string, string>>"
           :field-id="propName"
           :label="translateToolPropertyName(toolConfig.tool.id, propName)"
-          :view-mode="viewMode" />
+          :view-mode="isFormDisabled" />
         <div v-else-if="!isBooleanProperty(toolProperties[propName]) && areDependenciesMet(toolProperties[propName])" class="flex flex-col gap-1">
           <label :for="propName" class="text-sm font-semibold">{{ translateToolPropertyName(toolConfig.tool.id, propName) }}</label>
           <InteractiveInput
@@ -511,13 +607,31 @@ class ValidationErrors extends Error {
               :id="propName"
               :type="isSecretStringProperty(toolProperties[propName]) ? 'password' : 'text'"
               :placeholder="t(buildToolPropertyTranslationKey(toolConfig.tool.id, propName) + 'Placeholder')"
-              :disabled="viewMode"/>
+              :disabled="isFormDisabled"/>
           <p
             v-if="solveToolPropertyHelperText(toolConfig.tool.id, propName)"
             class="text-sm text-content-muted" v-html="solveToolPropertyHelperText(toolConfig.tool.id, propName)">
           </p>
         </div>
       </template>
+      <div
+          v-if="Object.values(toolProperties).some(isBooleanProperty)"
+          class="flex gap-2 border-t p-6 -mx-6 flex-col">
+        <span class="font-semibold text-sm">{{ t('advancedOptions') }}</span>
+        <template v-for="propName in Object.keys(toolProperties)" :key="propName">
+          <div
+              v-if="isBooleanProperty(toolProperties[propName])"
+              class="flex w-full flex-row gap-4 items-start">
+            <ToggleSwitch
+                v-model="mutableConfig[propName] as boolean"
+                v-tooltip.bottom="solveToolPropertyTooltip(toolConfig.tool.id, propName, mutableConfig[propName])"
+                class="shrink-0"
+                @update:model-value="onBeforeFileUpload"
+                :disabled="isFormDisabled" />
+            <span v-html="translateToolPropertyName(toolConfig.tool.id, propName)"></span>
+          </div>
+        </template>
+      </div>
       <div v-if="validationErrors" class="text-error-alt validation-errors" v-html="validationErrors"></div>
     </div>
     <div v-if="!viewMode && hasFileProperties" class="flex gap-2 bg-content dark:bg-surface-muted px-4 py-3 text-sm -mx-6 items-center justify-center text-surface dark:text-content">
@@ -529,8 +643,9 @@ class ValidationErrors extends Error {
       <SimpleButton @click="onClose" shape="square" :disabled="saving">
         {{ t('cancel') }}
       </SimpleButton>
-      <SimpleButton @click="saveToolConfig" variant="primary" shape="square" :disabled="isDoneDisabled">
-        {{ t(saveButtonText) }}
+      <SimpleButton @click="saveToolConfig" variant="primary" shape="square" :disabled="isDoneDisabled" class="min-w-20">
+        <IconLoader v-if="showSaveLoading" class="animate-spin" />
+        <template v-else>{{ t(saveButtonText) }}</template>
       </SimpleButton>
     </div>
 
@@ -553,25 +668,32 @@ class ValidationErrors extends Error {
   {
     "en": {
       "save": "Save",
+      "sync": "Sync",
       "add": "Add",
       "done": "Done",
       "cancel": "Cancel",
       "close": "Close",
+      "copyButton": "Copy callback URL",
       "authenticationWindowBlocked": "The authentication popup could not be opened. Please check that popups are allowed for this site and try again.",
       "authenticationCancelled": "The authentication was cancelled. Please complete the authentication process to configure this tool.",
       "authenticationAccessDenied": "The authentication was denied by the server. Please verify that you actually have the permissions necessary to use it.",
       "missingProperty": "A value is required for '{property}'. Please provide one.",
       "invalidPropertyFormat": "Provided '{property}' is not a valid {format}. Please, review the value and try again.",
       "invalidPropertyMinLength": "Provided '{property}' is shorter than {minLength} @:{'character'}. Please, review the value and try again.",
+      "invalidPropertyPattern": "Provided '{property}' has an invalid format. Please review the value and try again.",
       "character": "character | characters",
       "uriFormat": "URL",
       "invalidToolConfiguration": "Tool configuration failed. Please review the configuration and try again. If the problem persists, contact {'<'}a href='mailto:{contactEmail}?subject=Tero%20Error'>{contactEmail}{'<'}/a>.",
+      "duplicateToolConfiguration": "This agent already has another configuration of this tool with the same alias. Use a different one.",
       "docsToolMessage": "Use information from uploaded files in agent responses.",
       "docsToolAlertMessage": "{'<'}span class='font-semibold'>Only upload files that are relevant to this agent.{'<'}/span>{'<'}br/>This helps improve response quality and avoid unnecessary processing.",
       "docsFiles": "Files",
       "docsAdvancedFileProcessing": "{'<'}span class='font-semibold'>Process new PDFs with advanced AI{'<'}/span>{'<'}br/> {'<'}span class='text-content-muted'>Improves understanding of complex PDFs, with higher budget usage.{'<'}/span>",
       "docsAdvancedFileProcessingTooltipFalse": "Basic processing uses a simple algorithm to extract the content of the file. In general it is less accurate but it is faster and consumes less budget. \n\nNote: This option will only apply to new uploaded files.",
       "docsAdvancedFileProcessingTooltipTrue": "Advanced processing uses AI to extract the content of the file. In general it is more accurate but it consumes more budget and it may take longer to process. \n\nNote: This option will only apply to new uploaded files.",
+      "docsResponseGrounding": "{'<'}span class='font-semibold'>Verify answers{'<'}/span>{'<'}br/> {'<'}span class='text-content-muted'>Helps avoid answers that are not based on the documents. Takes more time and consumes more budget.{'<'}/span>",
+      "docsResponseGroundingTooltipTrue": "When enabled, answers are checked against the uploaded files and source links are added. This takes longer and uses more budget.",
+      "docsResponseGroundingTooltipFalse": "When disabled, answers are generated from retrieved excerpts without a second verification pass. This is faster and uses less budget, but answers may include facts not present in the files and omit source links.",
       "mcpToolMessage": "Use tools from any MCP server.",
       "mcpToolAlertMessage": "{'<'}span class='font-semibold'>Only connect servers you trust.{'<'}/span>",
       "mcpServerUrl": "Server URL",
@@ -584,6 +706,10 @@ class ValidationErrors extends Error {
       "mcpBearerToken": "Bearer Token",
       "mcpBearerTokenPlaceholder": "Paste your Bearer Token",
       "mcpBearerTokenHelperText": "Use a valid token with the permissions required by this server.",
+      "subagentToolMessage": "Delegate work to another Tero agent.",
+      "subagentToolAlertMessage": "{'<'}span class='font-semibold'>You can add agents from this agent's team or the Global team.{'<'}/span>{'<'}br/>A shared agent cannot use a private subagent.",
+      "subagentAgentId": "Subagent",
+      "subagentAgentIdHelperText": "The selected agent's description is used so the orchestrator knows when to delegate.",
       "customHeaders": "Headers",
       "jiraToolMessage": "Manage issues and track project activity.",
       "jiraToolAlertMessage": "To use this tool, configure a Jira OAuth app using the redirect URL below:",
@@ -595,6 +721,11 @@ class ValidationErrors extends Error {
       "githubToken": "Personal access token",
       "githubTokenPlaceholder": "Paste your GitHub personal access token",
       "githubTokenHelperText": "Create one in GitHub account Settings. {'<'}a class='inline! font-normal! underline!' href='https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens' target='_blank'>See guide{'<'}/a>.",
+      "notionToolMessage": "Search and retrieve pages and content from Notion.",
+      "notionToolAlertMessage": "You configure it once, and all users of this agent will use it with your data (Read-only access)",
+      "notionToken": "Integration token",
+      "notionTokenPlaceholder": "Paste your Notion integration token",
+      "notionTokenHelperText": "Create an internal integration in your Notion workspace. {'<'}a class='inline! font-normal! underline!' href='https://developers.notion.com/guides/get-started/internal-connections' target='_blank'>See guide{'<'}/a>.",
       "youtrackToolMessage": "Report issues, manage agile boards and log work time.",
       "youtrackToolAlertMessage": "Check the {'<'}a class='inline! font-normal! underline!' href='https://www.jetbrains.com/help/youtrack/server/model-context-protocol-server.html' target='_blank'>API documentation{'<'}/a>",
       "youtrackServerUrl": "Server URL",
@@ -612,12 +743,9 @@ class ValidationErrors extends Error {
       "zephyrAccessTokenPlaceholder": "Paste your Zephyr API access token",
       "zephyrAccessTokenHelperText": "Create one in your Jira/Zephyr account settings. {'<'}a class='inline! font-normal! underline!' href='https://support.smartbear.com/zephyr/docs/en/rest-api/api-access-tokens-management.html' target='_blank'>See guide{'<'}/a> (Zephyr Cloud), {'<'}a class='inline! font-normal! underline!' href='https://smartbear.portal.swaggerhub.com/zephyr-squad/default/authentication#generate-a-key' target='_blank'>see guide{'<'}/a> (Essential Cloud).",
       "practitestToolMessage": "Manage tests, test sets and requirements.",
-      "practitestToolAlertMessage": "To use this tool, provide your PractiTest MCP server URL.{'<'}br/>{'<'}br/>{'<'}span class='font-semibold'>US:{'<'}/span> https://api.practitest.com/mcp/v1/server{'<'}br/>{'<'}span class='font-semibold'>EU:{'<'}/span> https://eu1-prod-api.practitest.app/mcp/v1/server{'<'}br/>{'<'}br/>Check the {'<'}a class='inline! font-normal! underline!' href='https://www.practitest.com/help/integrations/mcp/' target='_blank'>API documentation{'<'}/a>.",
+      "practitestToolAlertMessage": "To use this tool, provide your PractiTest MCP server URL.{'<'}br/>{'<'}br/>{'<'}span class='font-semibold'>US:{'<'}/span> https://prod.practitest.com/mcp/v1/server{'<'}br/>{'<'}span class='font-semibold'>EU:{'<'}/span> https://eu1-prod.practitest.app/mcp/v1/server{'<'}br/>{'<'}br/>Check the {'<'}a class='inline! font-normal! underline!' href='https://www.practitest.com/help/integrations/mcp/' target='_blank'>API documentation{'<'}/a>.",
       "practitestServerUrl": "Server URL",
-      "practitestServerUrlPlaceholder": "https://api.practitest.com/mcp/v1/server",
-      "practitestToken": "Personal API Token",
-      "practitestTokenPlaceholder": "Paste your PractiTest personal API token",
-      "practitestTokenHelperText": "Create one in PractiTest account Settings. {'<'}a class='inline! font-normal! underline!' href='https://www.practitest.com/help/account/account-api-tokens/' target='_blank'>See guide{'<'}/a>.",
+      "practitestServerUrlPlaceholder": "https://prod.practitest.com/mcp/v1/server",
       "jiraClientId": "Client ID",
       "jiraClientIdPlaceholder": "Paste your OAuth client ID",
       "jiraClientSecret": "Client secret",
@@ -652,20 +780,38 @@ class ValidationErrors extends Error {
       "webToolMessage": "Search the web and extract content from any URL.",
       "browserToolMessage": "Interact with web sites and capture screenshots.{'<'}br/>{'<'}br/>Check the {'<'}a class='inline! font-normal! underline!' href='https://hub.docker.com/r/mcp/playwright#available-tools-21' target='_blank'>documentation{'<'}/a> to see supported actions.",
       "sqlToolMessage": "Get and modify information on a database.",
-      "sqlToolAlertMessage": "Since this tool can modify existing data, it is recommended to use a database user with only read permissions.",
+      "sqlToolAlertMessage": "Register a Microsoft Entra app for Azure SQL and add the redirect URL below to the app registration:",
+      "sqlToolAlertGuideMessage": "{'<'}br/>Users will need to be granted permissions on the database. Since this tool can modify existing data, it is recommended to grant only read permissions.",
       "sqlDbType": "Database type",
       "sqlDbTypeAzure": "Azure SQL Server",
       "sqlServer": "Server",
       "sqlServerPlaceholder": "myserver.database.windows.net",
+      "sqlAlias": "Alias",
+      "sqlAliasPlaceholder": "Enter a name for this connection",
+      "sqlAliasHelperText": "Name used by the agent to identify this connection. If empty, the server name is used.",
+      "sqlAliasPatternError": "The alias can only contain lowercase letters, numbers, dashes and underscores, must start with a letter or number and can not be longer than 30 characters.",
       "sqlAzureTenantId": "Tenant ID",
       "sqlAzureTenantIdPlaceholder": "Paste your Tenant ID",
       "sqlAzureTenantIdHelperText": "Found in Azure Portal under Microsoft Entra ID → Overview.",
       "sqlAzureClientId": "Client ID",
       "sqlAzureClientIdPlaceholder": "Paste your Client ID",
-      "sqlAzureClientIdHelperText": "Application (client) ID of your Azure AD app registration.",
+      "sqlAzureClientIdHelperText": "Application (client) ID of your Azure AD app registration. {'<'}a class='inline! font-normal! underline!' href='https://learn.microsoft.com/en-us/azure/databricks/query-federation/sql-server-entra#register-an-application-in-microsoft-entra-id' target='_blank'>See this guide{'<'}/a> on how to create the app registration.",
       "sqlAzureClientSecret": "Client Secret",
       "sqlAzureClientSecretPlaceholder": "Paste your Client Secret",
       "sqlAzureClientSecretHelperText": "Client secret of your Azure AD app registration.",
+      "codebaseToolMessage": "Connect to a repository.",
+      "codebaseToolAlertMessage": "{'<'}span class='font-semibold'>Only connect repositories you trust.{'<'}/span>",
+      "codebaseToolAlertGuideMessage": "Commit ID: {commitId} · Last sync: {syncedAt}",
+      "codebaseRepositoryUrl": "Repository URL",
+      "codebaseRepositoryUrlPlaceholder": "https://github.com/org/repo.git",
+      "codebaseRepositoryUrlHelperText": "Use the HTTPS clone URL of the repository.",
+      "codebaseRepositoryUrlPatternError": "Repository URL must be an HTTPS clone URL.",
+      "codebaseAccessToken": "Access Token",
+      "codebaseAccessTokenPlaceholder": "Paste your personal access token",
+      "codebaseAccessTokenHelperText": "Required for private repositories. Afterwards, any user will have access without needing a token.",
+      "codebaseRef": "Reference",
+      "codebaseRefPlaceholder": "Paste your branch or tag name",
+      "codebaseRefHelperText": "Leave empty to use the default branch.",
       "advancedOptions": "Advanced options",
       "savingChanges": "Saving changes...",
       "errorSavingChanges": "Save failed",
@@ -674,25 +820,32 @@ class ValidationErrors extends Error {
     },
     "es": {
       "save": "Guardar",
+      "sync": "Sincronizar",
       "add": "Agregar",
       "done": "Listo",
       "cancel": "Cancelar",
       "close": "Cerrar",
+      "copyButton": "Copiar URL de redirección",
       "authenticationWindowBlocked": "No se pudo abrir la ventana de autenticación. Por favor, verifica que las ventanas emergentes estén permitidas para este sitio y vuelve a intentarlo.",
       "authenticationCancelled": "La autenticación fue cancelada. Por favor, complete el proceso de autenticación para configurar esta herramienta.",
       "authenticationAccessDenied": "La autenticación fue denegada por el servidor. Por favor, verifica que tengas los permisos necesarios para usarlo.",
       "missingProperty": "Se requiere un valor para '{property}'. Por favor proporciona uno.",
       "invalidPropertyFormat": "El valor proporcionado para '{property}' no es válido. Por favor, revise el valor y vuelve a intentarlo.",
       "invalidPropertyMinLength": "El valor proporcionado para '{property}' es más corto que {minLength} @:{'character'}. Por favor, revise el valor y vuelve a intentarlo.",
+      "invalidPropertyPattern": "El valor proporcionado para '{property}' tiene un formato inválido. Por favor, revise el valor y vuelve a intentarlo.",
       "character": "caracter | caracteres",
       "uriFormat": "URL",
       "invalidToolConfiguration": "La configuración del tool falló. Por favor revise la configuración y vuelve a intentarlo. Si el problema persiste, contacta a {'<'}a href='mailto:{contactEmail}?subject=Tero%20Error'>{contactEmail}{'<'}/a>.",
+      "duplicateToolConfiguration": "Este agente ya tiene otra configuración de este tool con el mismo alias. Usa uno diferente.",
       "docsToolMessage": "Usa la información de los archivos subidos en las respuestas del agente.",
       "docsToolAlertMessage": "{'<'}span class='font-semibold'>Solo sube archivos que sean relevantes para este agente.{'<'}/span>{'<'}br/>Esto ayuda a mejorar la calidad de las respuestas y evitar procesamiento innecesario.",
       "docsFiles": "Archivos",
-      "docsAdvancedFileProcessing": "{'<'}span class='font-semibold'>Procesar nuevos PDF con IA avanzada{'<'}/span>",
+      "docsAdvancedFileProcessing": "{'<'}span class='font-semibold'>Procesar nuevos PDF con IA avanzada{'<'}/span>{'<'}br/> {'<'}span class='text-content-muted'>Mejora la comprensión de PDFs complejos, con mayor consumo de presupuesto.{'<'}/span>",
       "docsAdvancedFileProcessingTooltipFalse": "El procesamiento básico utiliza un algoritmo simple para extraer el contenido del archivo. En general es menos preciso pero es más rápido y consume menos presupuesto. \n\nNota: Esta opción se aplicará unicamente a los nuevos archivos subidos.",
       "docsAdvancedFileProcessingTooltipTrue": "El procesamiento avanzado utiliza IA para extraer el contenido del archivo. En general es más preciso pero consume más presupuesto y puede tardar más en procesarse.\n\nNota: Esta opción se aplicará unicamente a los nuevos archivos subidos.",
+      "docsResponseGrounding": "{'<'}span class='font-semibold'>Verificar respuestas{'<'}/span>{'<'}br/> {'<'}span class='text-content-muted'>Ayuda a evitar respuestas que no se basan en los documentos. Tarda más y consume más presupuesto.{'<'}/span>",
+      "docsResponseGroundingTooltipTrue": "Cuando está activado, las respuestas se contrastan con los archivos subidos y se agregan enlaces a las fuentes. Tarda más y consume más presupuesto.",
+      "docsResponseGroundingTooltipFalse": "Cuando está desactivado, las respuestas se generan a partir de los extractos recuperados sin una segunda verificación. Es más rápido y consume menos presupuesto, pero las respuestas pueden incluir datos que no están en los archivos y omitir enlaces a las fuentes.",
       "mcpToolMessage": "Usa herramientas de cualquier servidor MCP.",
       "mcpToolAlertMessage": "{'<'}span class='font-semibold'>Solo conecta servidores que confíes.{'<'}/span>",
       "mcpServerUrl": "URL del servidor",
@@ -705,6 +858,10 @@ class ValidationErrors extends Error {
       "mcpBearerToken": "Bearer Token",
       "mcpBearerTokenPlaceholder": "Pega tu Bearer Token",
       "mcpBearerTokenHelperText": "Usa un token válido con los permisos requeridos por este servidor.",
+      "subagentToolMessage": "Delega trabajo a otro agente de Tero.",
+      "subagentToolAlertMessage": "{'<'}span class='font-semibold'>Podés agregar agentes del equipo de este agente o del equipo Global.{'<'}/span>{'<'}br/>Un agente compartido no puede usar un subagente privado.",
+      "subagentAgentId": "Subagente",
+      "subagentAgentIdHelperText": "La descripción del agente seleccionado se usa para que el orquestador sepa cuándo delegar.",
       "customHeaders": "Headers",
       "jiraToolMessage": "Gestiona issues y sigue la actividad del proyecto.",
       "jiraToolAlertMessage": "Para usar esta herramienta, configura una app OAuth de Jira con la URL de redirección de abajo:",
@@ -716,6 +873,11 @@ class ValidationErrors extends Error {
       "githubToken": "Personal access token",
       "githubTokenPlaceholder": "Pega tu personal access token de GitHub",
       "githubTokenHelperText": "Créalo en la configuración de tu cuenta de GitHub. {'<'}a class='inline! font-normal! underline!' href='https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens' target='_blank'>Ver guía{'<'}/a>.",
+      "notionToolMessage": "Busca y recupera páginas y contenido de Notion.",
+      "notionToolAlertMessage": "La configurás vos una vez, y todos los usuarios del agente la usarán con tus datos (Acceso de solo lectura)",
+      "notionToken": "Token de integración",
+      "notionTokenPlaceholder": "Pega tu token de integración de Notion",
+      "notionTokenHelperText": "Creá una integración interna en tu workspace de Notion. {'<'}a class='inline! font-normal! underline!' href='https://developers.notion.com/guides/get-started/internal-connections' target='_blank'>Ver guía{'<'}/a>.",
       "youtrackToolMessage": "Reporta issues, gestiona tableros ágiles y registra tiempo de trabajo.",
       "youtrackToolAlertMessage": "Consulta la {'<'}a class='inline! font-normal! underline!' href='https://www.jetbrains.com/help/youtrack/server/model-context-protocol-server.html' target='_blank'>documentación de la API{'<'}/a>",
       "youtrackServerUrl": "URL del servidor",
@@ -733,12 +895,9 @@ class ValidationErrors extends Error {
       "zephyrAccessTokenPlaceholder": "Pega tu token de acceso de la API Zephyr",
       "zephyrAccessTokenHelperText": "Créalo en la configuración de tu cuenta de Jira/Zephyr. {'<'}a class='inline! font-normal! underline!' href='https://support.smartbear.com/zephyr/docs/en/rest-api/api-access-tokens-management.html' target='_blank'>Ver guía{'<'}/a> (Zephyr Cloud), {'<'}a class='inline! font-normal! underline!' href='https://smartbear.portal.swaggerhub.com/zephyr-squad/default/authentication#generate-a-key' target='_blank'>ver guía{'<'}/a> (Essential Cloud).",
       "practitestToolMessage": "Gestiona tests, conjuntos de tests y requisitos.",
-      "practitestToolAlertMessage": "Para usar esta herramienta, proporciona la URL del servidor MCP de PractiTest.{'<'}br/>{'<'}br/>{'<'}span class='font-semibold'>US:{'<'}/span> https://api.practitest.com/mcp/v1/server{'<'}br/>{'<'}span class='font-semibold'>EU:{'<'}/span> https://eu1-prod-api.practitest.app/mcp/v1/server{'<'}br/>{'<'}br/>Consulta la {'<'}a class='inline! font-normal! underline!' href='https://www.practitest.com/help/integrations/mcp/' target='_blank'>documentación de la API{'<'}/a>.",
+      "practitestToolAlertMessage": "Para usar esta herramienta, proporciona la URL del servidor MCP de PractiTest.{'<'}br/>{'<'}br/>{'<'}span class='font-semibold'>US:{'<'}/span> https://prod.practitest.com/mcp/v1/server{'<'}br/>{'<'}span class='font-semibold'>EU:{'<'}/span> https://eu1-prod.practitest.app/mcp/v1/server{'<'}br/>{'<'}br/>Consulta la {'<'}a class='inline! font-normal! underline!' href='https://www.practitest.com/help/integrations/mcp/' target='_blank'>documentación de la API{'<'}/a>.",
       "practitestServerUrl": "URL del servidor",
-      "practitestServerUrlPlaceholder": "https://api.practitest.com/mcp/v1/server",
-      "practitestToken": "Token personal de API",
-      "practitestTokenPlaceholder": "Pega tu token personal de API de PractiTest",
-      "practitestTokenHelperText": "Crealo en la configuración de tu cuenta de PractiTest. {'<'}a class='inline! font-normal! underline!' href='https://www.practitest.com/help/account/account-api-tokens/' target='_blank'>Ver guía{'<'}/a>.",
+      "practitestServerUrlPlaceholder": "https://prod.practitest.com/mcp/v1/server",
       "jiraClientId": "ID del cliente",
       "jiraClientIdPlaceholder": "Pega tu OAuth client ID",
       "jiraClientSecret": "Secreto del cliente",
@@ -773,20 +932,38 @@ class ValidationErrors extends Error {
       "webToolMessage": "Busca en la web y extrae contenido de cualquier URL.",
       "browserToolMessage": "Interactúa con sitios web y toma capturas de pantalla.{'<'}br/>{'<'}br/>Consulta la {'<'}a class='inline! font-normal! underline!' href='https://hub.docker.com/r/mcp/playwright#available-tools-21' target='_blank'>documentación{'<'}/a> para ver las acciones compatibles.",
       "sqlToolMessage": "Obtiene y modifica información en una base de datos.",
-      "sqlToolAlertMessage": "Ya que esta herramienta puede modificar datos existentes, se recomienda usar un usuario de base de datos con permisos de solo lectura.",
+      "sqlToolAlertMessage": "Registra una app de Microsoft Entra para Azure SQL y agrega la URL de redirección de abajo al registro de la app:",
+      "sqlToolAlertGuideMessage": "{'<'}br/>Los usuarios deberán recibir permisos en la base de datos. Ya que esta herramienta puede modificar datos existentes, se recomienda otorgar permisos de solo lectura.",
       "sqlDbType": "Tipo de base de datos",
       "sqlDbTypeAzure": "Azure SQL Server",
       "sqlServer": "Servidor",
       "sqlServerPlaceholder": "myserver.database.windows.net",
+      "sqlAlias": "Alias",
+      "sqlAliasPlaceholder": "Ingresa un nombre para esta conexión",
+      "sqlAliasHelperText": "Nombre que usa el agente para identificar esta conexión. Si se deja vacío, se usa el nombre del servidor.",
+      "sqlAliasPatternError": "El alias solo puede contener minúsculas, números, guiones y guiones bajos, debe empezar con una letra o número y no puede tener más de 30 caracteres.",
       "sqlAzureTenantId": "Tenant ID",
       "sqlAzureTenantIdPlaceholder": "Pega tu Tenant ID",
       "sqlAzureTenantIdHelperText": "Lo encuentras en Azure Portal bajo Microsoft Entra ID → Resumen.",
       "sqlAzureClientId": "Client ID",
       "sqlAzureClientIdPlaceholder": "Pega tu Client ID",
-      "sqlAzureClientIdHelperText": "ID de aplicación (cliente) de tu registro de app en Azure AD.",
+      "sqlAzureClientIdHelperText": "ID de aplicación (cliente) de tu registro de app en Azure AD. {'<'}a class='inline! font-normal! underline!' href='https://learn.microsoft.com/en-us/azure/databricks/query-federation/sql-server-entra#register-an-application-in-microsoft-entra-id' target='_blank'>Consulta esta guía{'<'}/a> sobre cómo crear la app.",
       "sqlAzureClientSecret": "Client Secret",
       "sqlAzureClientSecretPlaceholder": "Pega tu Client Secret",
       "sqlAzureClientSecretHelperText": "Client secret de tu registro de app en Azure AD.",
+      "codebaseToolMessage": "Conecta un repositorio.",
+      "codebaseToolAlertMessage": "{'<'}span class='font-semibold'>Solo conecta repositorios en los que confíes.{'<'}/span>",
+      "codebaseToolAlertGuideMessage": "Commit ID: {commitId} · Última sincronización: {syncedAt}",
+      "codebaseRepositoryUrl": "URL del repositorio",
+      "codebaseRepositoryUrlPlaceholder": "https://github.com/org/repo.git",
+      "codebaseRepositoryUrlHelperText": "Usa la URL HTTPS de clonación del repositorio.",
+      "codebaseRepositoryUrlPatternError": "La URL del repositorio debe ser una URL HTTPS de clonación.",
+      "codebaseAccessToken": "Token de acceso",
+      "codebaseAccessTokenPlaceholder": "Pega tu personal access token",
+      "codebaseAccessTokenHelperText": "Requerido para repositorios privados. Luego cualquier usuario tendrá acceso sin necesidad de token.",
+      "codebaseRef": "Referencia",
+      "codebaseRefPlaceholder": "Pega el nombre de tu rama o tag",
+      "codebaseRefHelperText": "Dejar vacío para usar la rama por defecto.",
       "advancedOptions": "Opciones avanzadas",
       "savingChanges": "Guardando cambios...",
       "errorSavingChanges": "Guardar falló",
